@@ -51,6 +51,16 @@ class FulfillmentIT {
         var key=new OrderKey("batch-test","1");
         var request=new Admission(key,new OrderRequest("B","sku",3));
         var id=ledger.acceptBatch(List.of(request,request)).get(key).id();
+        assertEquals(7,id.version());
+        var publish=batches.claim("OUTBOX",1);
+        var stale=publish.stream().map(l -> new Lease(l.id(),l.orderId(),l.payload(),l.token()-1,l.attempts())).toList();
+        batches.published(stale);
+        assertNotNull(em.find(WorkItem.class,publish.getFirst().id()));
+        batches.published(publish);
+        em.clear();
+        assertNull(em.find(WorkItem.class,publish.getFirst().id()));
+        assertEquals(1L,((Number)em.createNativeQuery("SELECT count(*) FROM history WHERE order_id=:id")
+            .setParameter("id",id).getSingleResult()).longValue());
         var event=new Event(UUID.randomUUID(),id,"ACCEPTED");
         batches.dispatch(List.of(event,event));
         var old=batches.claim("SHIP_B",1);

@@ -34,8 +34,8 @@ class BatchStore {
 
     void published(List<Lease> sent) {
         em.createNativeQuery("""
-            UPDATE work_item w SET done=true FROM jsonb_to_recordset(cast(:batch as jsonb))
-            AS b(id uuid,token bigint) WHERE w.id=b.id AND w.token=b.token AND NOT w.done
+            DELETE FROM work_item w USING jsonb_to_recordset(cast(:batch as jsonb))
+            AS b(id uuid,token bigint) WHERE w.id=b.id AND w.token=b.token AND w.kind='OUTBOX' AND NOT w.done
             """).setParameter("batch",json.writeValueAsString(sent)).executeUpdate();
     }
 
@@ -78,7 +78,7 @@ class BatchStore {
                 UPDATE fulfillment_order o SET state='CONFIRMED',revision=revision+1
                 FROM completed c WHERE o.id=c.order_id AND o.state<>'CONFIRMED' RETURNING o.id
             ), audit AS (
-                INSERT INTO history(id,order_id,state) SELECT gen_random_uuid(),id,'CONFIRMED' FROM changed
+                INSERT INTO history(id,order_id,state) SELECT ledger_uuid_v7(),id,'CONFIRMED' FROM changed
                 RETURNING id,order_id,state
             ), queued AS (
                 INSERT INTO work_item(id,order_id,kind,payload) SELECT id,order_id,'OUTBOX',state FROM audit

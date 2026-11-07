@@ -27,13 +27,13 @@ class Ledger {
         List<Object[]> inserted=em.createNativeQuery("""
             WITH accepted AS (
                 INSERT INTO fulfillment_order(id,tenant,request_key,sku,quantity,warehouse,state)
-                SELECT gen_random_uuid(),tenant,key,sku,quantity,warehouse,'ACCEPTED'
+                SELECT ledger_uuid_v7(),tenant,key,sku,quantity,warehouse,'ACCEPTED'
                 FROM jsonb_to_recordset(cast(:rows as jsonb))
                     AS b(tenant text,key text,sku text,quantity integer,warehouse text)
                 ORDER BY tenant,key ON CONFLICT (tenant,request_key) DO NOTHING
                 RETURNING id,tenant,request_key,warehouse,sku,quantity,state
             ), audit AS (
-                INSERT INTO history(id,order_id,state) SELECT gen_random_uuid(),id,state FROM accepted
+                INSERT INTO history(id,order_id,state) SELECT ledger_uuid_v7(),id,state FROM accepted
                 RETURNING id,order_id,state
             ), queued AS (
                 INSERT INTO work_item(id,order_id,kind,payload) SELECT id,order_id,'OUTBOX',state FROM audit
