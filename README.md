@@ -93,7 +93,17 @@ k6 run -e RUN_ID=baseline-001 -e RATE=5 -e DURATION=30s load/orders.js
 python scripts/reconcile.py baseline-001
 ```
 
-Use a fresh run ID for each load run. Each iteration creates an order, reads warehouse metadata and queries the order. Record achieved arrival rate, dropped iterations, latency, queue age and the reconciliation count. Ramp rate and VUs on a dedicated test host. The proposed 2,000 creates/s is a sizing target; a laptop run establishes a local baseline only.
+Use a fresh run ID for each load run. Each iteration creates an order, reads warehouse metadata and queries the order.
+
+### Measured throughput
+
+On November 7, 2026, a 120-second single-host Linux test averaged **2,052 accepted orders/s** and **1,809 warehouse confirmations/s** end to end. The sustained fulfillment target of 2,000/s remains open. A preceding 30-second tuning run confirmed 2,097/s before per-order confirmation logging was restored.
+
+The longer run included per-order confirmation logging, one API, one worker, a separate warehouse process, PostgreSQL, Kafka and Redis. The processes and load generator shared a memory-limited WSL environment. After warm-up, k6 scheduled 2,100 iterations/s with 400 virtual users. All 246,335 submitted orders succeeded; k6 dropped 5,666 scheduled iterations. Order creation P99 was 232 ms.
+
+The first post-load snapshot counted 41,993 orders awaiting confirmation. The last confirmation arrived 16.20 seconds after the last admission. All 246,335 orders subsequently matched their warehouse payloads and confirmed timeline entries. The end-to-end rate includes this drain time. In 83 of the 120 one-second buckets, fewer than 2,000 orders reached confirmation.
+
+[k6 measurements](benchmarks/2026-11-07/k6.json) · [Post-load snapshot](benchmarks/2026-11-07/results.txt) · [Reconciliation](benchmarks/2026-11-07/reconciliation.txt) · [Ten-second windows](benchmarks/2026-11-07/windows.txt)
 
 `mvn verify` runs PostgreSQL, Kafka and Redis with Testcontainers and a WireMock warehouse. GitHub Actions also starts Compose and runs the persisted lost-response drill. For network experiments, start `docker compose --profile fault up -d`, configure a Toxiproxy listener with upstream `warehouse:8080`, and point the worker's `WAREHOUSE_URL` at that listener using a Compose override.
 

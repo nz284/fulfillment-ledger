@@ -39,7 +39,44 @@ class FulfillmentIT {
     }
 
     @Autowired Ledger ledger;
+    @Autowired OrderAdmissions admissions;
     @Autowired OrderApi api;
+    @Autowired WarehouseBook book;
+    @Autowired BatchStore batches;
+    @Autowired jakarta.persistence.EntityManager em;
+
+    @Test
+    @org.springframework.transaction.annotation.Transactional
+    void reclaimedBatchRejectsStaleWorkerAndProjectsOnce() {
+        var key=new OrderKey("batch-test","1");
+        var request=new Admission(key,new OrderRequest("B","sku",3));
+        var id=ledger.acceptBatch(List.of(request,request)).get(key).id();
+        var event=new Event(UUID.randomUUID(),id,"ACCEPTED");
+        batches.dispatch(List.of(event,event));
+        var old=batches.claim("SHIP_B",1);
+        assertEquals(id,old.getFirst().orderId());
+        em.createNativeQuery("UPDATE work_item SET available_at=now() WHERE id=:id")
+            .setParameter("id",old.getFirst().id()).executeUpdate();
+        var current=batches.claim("SHIP_B",1);
+        assertTrue(batches.confirmed(old).isEmpty());
+        assertEquals(List.of(id),batches.confirmed(current));
+        assertTrue(batches.confirmed(current).isEmpty());
+        var confirmed=new Event(UUID.randomUUID(),id,"CONFIRMED");
+        batches.project(List.of(confirmed,event,confirmed));
+        assertEquals(List.of("ACCEPTED","CONFIRMED"),ledger.timeline(id));
+    }
+    @Test void warehouseBatchReplaysAndRollsBackConflictingPayloads() {
+        var first=new Shipment(UUID.randomUUID(),"B","book",1);
+        var second=new Shipment(UUID.randomUUID(),"B","lamp",2);
+        book.acceptBatch(List.of(first,second));
+        book.acceptBatch(List.of(second,first));
+        var third=new Shipment(UUID.randomUUID(),"B","pen",1);
+        var conflict=new Shipment(first.id(),"B","other",1);
+        assertThrows(ResponseStatusException.class,()->book.acceptBatch(List.of(third,conflict)));
+        assertThrows(ResponseStatusException.class,()->book.get(third.id()));
+        assertEquals(first,book.get(first.id()));
+        assertEquals(second,book.get(second.id()));
+    }
     @Test void concurrentRetriesAndLostWarehouseResponse() throws Exception {
         var request=new OrderRequest("A","book",2);
         warehouse.stubFor(post(urlEqualTo("/shipments")).willReturn(aResponse().withFixedDelay(3200).withStatus(200)));
@@ -47,7 +84,7 @@ class FulfillmentIT {
         Set<UUID> ids=new HashSet<>();
         try(var pool=Executors.newVirtualThreadPerTaskExecutor()) {
             List<Future<UUID>> calls=new ArrayList<>();
-            for(int i=0;i<12;i++) calls.add(pool.submit(()->{gate.await();return ledger.accept("shop","same",request).id();}));
+            for(int i=0;i<12;i++) calls.add(pool.submit(()->{gate.await();return admissions.accept("shop","same",request).id();}));
             gate.countDown();
             for(var call:calls) ids.add(call.get(15,TimeUnit.SECONDS));
         }
@@ -56,7 +93,7 @@ class FulfillmentIT {
         warehouse.stubFor(get(urlEqualTo("/shipments/"+id)).willReturn(okJson("""
             {"id":"%s","warehouse":"A","sku":"book","quantity":2}
             """.formatted(id))));
-        assertThrows(ResponseStatusException.class,()->ledger.accept("shop","same",new OrderRequest("A","other",2)));
+        assertThrows(ResponseStatusException.class,()->admissions.accept("shop","same",new OrderRequest("A","other",2)));
         assertThrows(ResponseStatusException.class,()->ledger.forTenant(id,"another-shop"));
         await().atMost(Duration.ofSeconds(90)).untilAsserted(()->assertEquals(
             List.of("ACCEPTED","UNCONFIRMED","CONFIRMED"),ledger.timeline(id)));

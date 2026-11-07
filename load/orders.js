@@ -7,10 +7,12 @@ const base = __ENV.BASE_URL || 'http://localhost:8080';
 const run = __ENV.RUN_ID;
 if (!run) throw new Error('Set RUN_ID to a unique test identifier');
 export const options = {
+  summaryTrendStats: ['avg','med','p(95)','p(99)','max'],
   scenarios: { orders: { executor: 'constant-arrival-rate', rate, timeUnit: '1s',
     duration: __ENV.DURATION || '30s', preAllocatedVUs: Number(__ENV.VUS || 20),
     maxVUs: Number(__ENV.MAX_VUS || 100) } },
-  thresholds: { http_req_failed: ['rate<0.01'], dropped_iterations: ['count==0'], checks: ['rate>0.99'] }
+  thresholds: { http_req_failed: ['rate<0.01'], dropped_iterations: ['count==0'], checks: ['rate>0.99'],
+    'http_req_duration{name:create}': ['p(99)<60000'] }
 };
 export default function () {
   const iteration = exec.scenario.iterationInTest;

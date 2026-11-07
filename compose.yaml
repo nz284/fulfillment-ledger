@@ -4,7 +4,7 @@ x-app: &app
   image: fulfillment-ledger:local
   restart: on-failure
   environment: &base
-    JAVA_TOOL_OPTIONS: "-Xmx224m -XX:ActiveProcessorCount=2"
+    JAVA_TOOL_OPTIONS: "-Xmx384m -XX:ActiveProcessorCount=4"
     DB_URL: jdbc:postgresql://postgres:5432/fulfillment
     KAFKA_SERVERS: kafka:9092
     REDIS_HOST: redis
@@ -47,7 +47,7 @@ services:
     ports: ["127.0.0.1:8080:8080"]
   worker:
     <<: *app
-    environment: {<<: *base, SPRING_PROFILES_ACTIVE: worker, APP_NAME: worker}
+    environment: {<<: *base, SPRING_PROFILES_ACTIVE: worker, APP_NAME: worker, APP_WAREHOUSE_BATCH: "true"}
   warehouse:
     <<: *app
     environment: {<<: *base, SPRING_PROFILES_ACTIVE: warehouse, APP_NAME: warehouse, DB_URL: "jdbc:postgresql://postgres:5432/warehouse"}

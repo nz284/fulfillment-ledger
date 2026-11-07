@@ -13,16 +13,17 @@ import org.springframework.web.server.ResponseStatusException;
 @Profile("api")
 class OrderApi {
     private final Ledger ledger;
+    private final OrderAdmissions admissions;
     private final StringRedisTemplate cache;
     private final java.util.concurrent.Semaphore fallback = new java.util.concurrent.Semaphore(8);
-    OrderApi(Ledger ledger, StringRedisTemplate cache) { this.ledger = ledger; this.cache = cache; }
+    OrderApi(Ledger ledger, StringRedisTemplate cache,OrderAdmissions admissions) { this.admissions=admissions; this.ledger = ledger; this.cache = cache; }
 
     @PostMapping("/orders")
     ResponseEntity<OrderView> create(@RequestHeader("X-Tenant") String tenant,
             @RequestHeader("Idempotency-Key") String key, @RequestBody OrderRequest request) {
         if (tenant.isBlank() || tenant.length()>100 || key.isBlank() || key.length()>160 || !request.valid())
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST,"Invalid tenant, key, warehouse, SKU or quantity");
-        OrderView view = ledger.accept(tenant,key,request);
+        OrderView view = admissions.accept(tenant,key,request);
         return ResponseEntity.accepted().body(view);
     }
 

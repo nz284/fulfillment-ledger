@@ -14,7 +14,18 @@ import org.springframework.web.server.ResponseStatusException;
 @Transactional
 class WarehouseBook {
     private final EntityManager em;
-    WarehouseBook(EntityManager em) { this.em=em; }
+    private final tools.jackson.databind.ObjectMapper json;
+    WarehouseBook(EntityManager em, tools.jackson.databind.ObjectMapper json) { this.em=em; this.json=json; }
+    void acceptBatch(List<Shipment> shipments) {
+        int count=em.createNativeQuery("""
+            INSERT INTO shipment AS s(id,warehouse,sku,quantity)
+            SELECT id,warehouse,sku,quantity FROM jsonb_to_recordset(cast(:items as jsonb))
+                AS b(id uuid,warehouse text,sku text,quantity int) ORDER BY id
+            ON CONFLICT(id) DO UPDATE SET sku=excluded.sku
+            WHERE (s.sku,s.warehouse,s.quantity)=(excluded.sku,excluded.warehouse,excluded.quantity)
+            """).setParameter("items",json.writeValueAsString(shipments)).executeUpdate();
+        if (count!=shipments.size()) throw new ResponseStatusException(HttpStatus.CONFLICT);
+    }
     void accept(Shipment s) {
         em.createNativeQuery("""
           INSERT INTO shipment(id,warehouse,sku,quantity) VALUES (:id,:warehouse,:sku,:qty)
@@ -46,6 +57,12 @@ class WarehouseApi {
         if (slow.contains(s.warehouse())) Thread.sleep(3500);
     }
     @GetMapping("/shipments/{id}") Shipment lookup(@PathVariable UUID id) { return book.get(id); }
+    @PostMapping("/shipments/batch")
+    void batch(@RequestBody List<Shipment> items) throws InterruptedException {
+        if (items.isEmpty() || items.size()>256) throw new ResponseStatusException(HttpStatus.BAD_REQUEST);
+        book.acceptBatch(items);
+        if (items.stream().anyMatch(item -> slow.contains(item.warehouse()))) Thread.sleep(3500);
+    }
     @PutMapping("/demo/slow/{warehouse}") void slow(@PathVariable String warehouse) { slow.add(warehouse); }
     @DeleteMapping("/demo/slow/{warehouse}") void recover(@PathVariable String warehouse) { slow.remove(warehouse); }
 }

@@ -13,10 +13,12 @@ class OrderRulesTest {
         assertFalse(new OrderRequest("B","book",0).valid());
     }
 
-    @Test void onlyAcceptanceCreatesDispatchTask() {
-        Ledger ledger=mock(Ledger.class,withSettings().defaultAnswer(CALLS_REAL_METHODS));
-        ledger.dispatch(new Event(UUID.randomUUID(),UUID.randomUUID(),"CONFIRMED"));
-        verify(ledger,never()).enqueue(any(),any(),any(),any());
+    @Test void invalidOrdersNeverReachPersistence() {
+        Ledger ledger=mock(Ledger.class);
+        OrderApi api=new OrderApi(ledger,null,null);
+        assertThrows(org.springframework.web.server.ResponseStatusException.class,
+            () -> api.create("shop","key",new OrderRequest("A","book",0)));
+        verifyNoInteractions(ledger);
     }
 
     @Test void replayUsesBusinessSequence() {

@@ -15,8 +15,5 @@ class OrderEntity {
     String state;
     @Version long revision;
 
-    boolean matches(OrderRequest r) {
-        return warehouse.equals(r.warehouse()) && sku.equals(r.sku()) && quantity == r.quantity();
-    }
     OrderView view() { return new OrderView(id, warehouse, sku, quantity, state); }
 }

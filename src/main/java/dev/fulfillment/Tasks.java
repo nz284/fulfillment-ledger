@@ -2,7 +2,6 @@ package dev.fulfillment;
 
 import jakarta.persistence.*;
 import java.time.Duration;
-import java.util.*;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -13,21 +12,7 @@ class Tasks {
     private final Ledger ledger;
     Tasks(Ledger ledger) { this.ledger = ledger; }
 
-    Optional<Lease> claim(String kind) {
-        List<WorkItem> rows = em.createNativeQuery("""
-            SELECT * FROM work_item WHERE kind=:kind AND NOT done AND available_at <= now()
-            ORDER BY available_at,id LIMIT 1 FOR UPDATE SKIP LOCKED
-            """,WorkItem.class).setParameter("kind",kind).getResultList();
-        return rows.stream().findFirst().map(row -> {
-            row.token++;
-            row.attempts++;
-            // All leases and retries use the database clock.
-            delay(row.id,30);
-            return new Lease(row.id,row.orderId,row.payload,row.token,row.attempts);
-        });
-    }
-
-    private void delay(UUID id, long seconds) {
+    private void delay(java.util.UUID id, long seconds) {
         em.createNativeQuery("UPDATE work_item SET available_at=now()+(:seconds * interval '1 second') WHERE id=:id")
             .setParameter("seconds",seconds).setParameter("id",id).executeUpdate();
     }
