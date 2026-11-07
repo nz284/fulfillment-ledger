@@ -16,6 +16,7 @@ x-app: &app
 services:
   postgres:
     image: postgres:17-alpine
+    command: [postgres, -c, wal_compression=lz4]
     environment: {POSTGRES_USER: fulfillment, POSTGRES_PASSWORD: demo, POSTGRES_DB: fulfillment}
     volumes: [db:/var/lib/postgresql/data, ./ops/init.sql:/docker-entrypoint-initdb.d/warehouse.sql:ro]
     healthcheck: {test: [CMD-SHELL, pg_isready -U fulfillment], interval: 2s, timeout: 3s, retries: 30}
