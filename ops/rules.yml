@@ -1,0 +1,8 @@
+groups:
+  - name: fulfillment
+    rules:
+      - alert: FulfillmentPastDeadline
+        expr: fulfillment_oldest_pending_seconds > 300
+        for: 30s
+        labels: {severity: warning}
+        annotations: {summary: "An accepted order has waited over five minutes for warehouse confirmation"}

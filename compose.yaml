@@ -1,0 +1,81 @@
+name: fulfillment-ledger
+x-app: &app
+  build: .
+  image: fulfillment-ledger:local
+  restart: on-failure
+  environment: &base
+    JAVA_TOOL_OPTIONS: "-Xmx224m -XX:ActiveProcessorCount=2"
+    DB_URL: jdbc:postgresql://postgres:5432/fulfillment
+    KAFKA_SERVERS: kafka:9092
+    REDIS_HOST: redis
+    TRACE_ENDPOINT: http://tempo:4318/v1/traces
+    WAREHOUSE_URL: http://warehouse:8080
+    SPRING_TASK_SCHEDULING_POOL_SIZE: 4
+  depends_on:
+    postgres: {condition: service_healthy}
+services:
+  postgres:
+    image: postgres:17-alpine
+    environment: {POSTGRES_USER: fulfillment, POSTGRES_PASSWORD: demo, POSTGRES_DB: fulfillment}
+    volumes: [db:/var/lib/postgresql/data, ./ops/init.sql:/docker-entrypoint-initdb.d/warehouse.sql:ro]
+    healthcheck: {test: [CMD-SHELL, pg_isready -U fulfillment], interval: 2s, timeout: 3s, retries: 30}
+  redis:
+    image: redis:7.4-alpine
+  kafka:
+    image: apache/kafka:4.1.1
+    depends_on: {kafka-volume: {condition: service_completed_successfully}}
+    environment:
+      KAFKA_HEAP_OPTS: "-Xms128m -Xmx256m"
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_LISTENERS: PLAINTEXT://:9092,CONTROLLER://:9093
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_LOG_DIRS: /tmp/kraft-combined-logs
+    volumes: [events:/tmp/kraft-combined-logs]
+  kafka-volume:
+    image: postgres:17-alpine
+    user: root
+    entrypoint: [chown, "1000:1000", /events]
+    volumes: [events:/events]
+  api:
+    <<: *app
+    environment: {<<: *base, SPRING_PROFILES_ACTIVE: api, APP_NAME: api}
+    ports: ["127.0.0.1:8080:8080"]
+  worker:
+    <<: *app
+    environment: {<<: *base, SPRING_PROFILES_ACTIVE: worker, APP_NAME: worker}
+  warehouse:
+    <<: *app
+    environment: {<<: *base, SPRING_PROFILES_ACTIVE: warehouse, APP_NAME: warehouse, DB_URL: "jdbc:postgresql://postgres:5432/warehouse"}
+    ports: ["127.0.0.1:8082:8080"]
+  prometheus:
+    image: prom/prometheus:v3.5.0
+    profiles: [observe]
+    volumes: [./ops/prometheus.yml:/etc/prometheus/prometheus.yml:ro, ./ops/rules.yml:/etc/prometheus/rules.yml:ro]
+  loki:
+    image: grafana/loki:3.5.5
+    profiles: [observe]
+  tempo:
+    image: grafana/tempo:2.8.2
+    profiles: [observe]
+    command: [-config.file=/etc/tempo.yaml]
+    volumes: [./ops/tempo.yml:/etc/tempo.yaml:ro]
+  alloy:
+    image: grafana/alloy:v1.10.2
+    profiles: [observe]
+    volumes: [/var/run/docker.sock:/var/run/docker.sock:ro, ./ops/config.alloy:/etc/alloy/config.alloy:ro]
+  grafana:
+    image: grafana/grafana:12.1.1
+    profiles: [observe]
+    ports: ["127.0.0.1:3000:3000"]
+    environment: {GF_AUTH_ANONYMOUS_ENABLED: "true", GF_AUTH_ANONYMOUS_ORG_ROLE: Viewer}
+    volumes: [./ops/grafana:/etc/grafana/provisioning:ro]
+  toxiproxy:
+    profiles: [fault]
+    image: ghcr.io/shopify/toxiproxy:2.12.0
+    ports: ["127.0.0.1:8474:8474"]
+volumes: {db: {}, events: {}}
