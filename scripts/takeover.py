@@ -173,6 +173,9 @@ def run():
     report["b_trace"] = latency
     if path := os.environ.get("TAKEOVER_REPORT"):
         Path(path).write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
+    if budget := os.environ.get("B_FAULT_P95_BUDGET_MS"):
+        observed = latency["fault"]["admitted_to_confirmed"]["p95_ms"]
+        require(observed <= float(budget), f"B fault-window P95 {observed} ms exceeds {budget} ms")
 
 
 if __name__ == "__main__":

@@ -30,9 +30,15 @@ Run `python scripts/takeover.py` from the repository root with Python 3.9+ and D
 
 The crash timer starts immediately before sending the kill command. Durations use PostgreSQL timestamps. Set `TAKEOVER_REPORT` to a file path to save the JSON result. The GitHub Actions verification workflow publishes this file as the **takeover-report** artifact.
 
+The drill also submits a B order every 500 ms, starting at least 12 seconds before the crash and continuing through the following 50 seconds. Each trial reports sample counts, nearest-rank P95 and maximum latency separately for orders admitted before and after the kill boundary. Each B probe must reach warehouse confirmation, match its stored payload and appear in the Kafka timeline. CI runs two trials with fresh stacks.
+
+In the JSON report, `b_trace.orders` contains the per-order timestamps (epoch seconds) and Kafka partition. Admission and confirmation use the database history/order transaction times. A drill-only database trigger timestamps task insertion and first claim. Worker debug logs timestamp the producer acknowledgement callback and the dispatch listener's receipt of the event; these observations use the same runner clock. Closely spaced acknowledgement and receipt observations can arrive in either order. `b_trace.rebalances` records partition assignment, revocation and loss messages by worker. A killed process cannot log its own revocation.
+
 In the first verified run, A was confirmed 28.863 seconds after the crash. Its original lease had 28.705 seconds remaining when the kill command began. The warehouse recorded one submission and one shipment. B, submitted after the crash, took 45.411 seconds to confirm and finished after A. These are single-order measurements from this run. [CI run and report](https://github.com/nz284/fulfillment-ledger/actions/runs/42436180750)
 
 ## Architecture
+
+The two instrumented baseline trials placed B's post-crash P95 between 30.11 and 42.09 seconds. The interval from Kafka acknowledgement to dispatch listener receipt accounted for 30.03 and 42.02 seconds at P95. In both trials the task creation-to-claim P95 stayed below 18 ms. The worker now uses Kafka classic consumer groups with a 9-second session timeout and a 2-second heartbeat interval. A broker can therefore reassign a departed consumer's partitions sooner. A shorter timeout also makes a prolonged network or JVM pause more likely to trigger reassignment. Deployments can override `KAFKA_SESSION_TIMEOUT_MS` and `KAFKA_HEARTBEAT_MS` within their broker's allowed range. The separate PostgreSQL task lease remains 30 seconds. CI checks B's fault-window P95 against a 15-second budget. [Baseline trials](https://github.com/nz284/fulfillment-ledger/actions/runs/42436928412)
 
 ```mermaid
 flowchart LR
