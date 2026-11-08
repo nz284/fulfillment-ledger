@@ -4,7 +4,7 @@ A Java 21 distributed order-fulfillment demo. The warehouse can accept a shipmen
 
 ## Run the lost-response demo
 
-第一次调用项目，可直接看 [API reference（中文）](#api-reference)，里面有 PowerShell 下单示例和全部业务接口。
+To place your first order, follow the PowerShell walkthrough in the [API reference](#api-reference).
 
 Prerequisites are Docker Compose with Linux containers and Python 3.9+. The application and its infrastructure run locally. Demo endpoints bind to loopback.
 
@@ -61,9 +61,9 @@ One Maven artifact runs under three profiles. API, worker and warehouse have sep
 
 ## API reference
 
-### 启动服务
+### Start the services
 
-在装有 Git 和 Docker Compose 的终端运行以下命令。Docker Desktop 使用 Linux 容器。首次启动会构建 Java 应用并初始化数据库。
+Install Git and Docker Compose, then run the commands below. If you use Docker Desktop, select Linux containers. On the first run, Compose builds the Java application and initializes PostgreSQL.
 
 ```sh
 git clone https://github.com/nz284/fulfillment-ledger.git
@@ -72,17 +72,17 @@ docker compose up --build -d
 docker compose ps
 ```
 
-| 服务 | 本机地址 | 调用方和用途 |
+| Service | Address | Purpose |
 |---|---|---|
-| 订单 API | `http://localhost:8080` | 客户端创建订单、查看状态和时间线、查询仓库资料。 |
-| 模拟仓库 | `http://localhost:8082` | Worker 自动提交和查询发货单。开发者也可以直接调用，验证幂等和超时恢复。 |
-| Worker | Compose 内部 `http://worker:8080` | 自动消费 Kafka 消息、发货和重试。主机未映射该端口。 |
+| Order API | `http://localhost:8080` | Create orders, check their status and timeline, and look up warehouses. |
+| Warehouse simulator | `http://localhost:8082` | The worker submits and looks up shipments here. Call it directly to test retries or simulate a timeout. |
+| Worker | `http://worker:8080` on the Compose network | Consumes Kafka events, dispatches shipments and retries failed requests. Its port is accessible inside the Compose network. |
 
-访问 `http://localhost:8080/actuator/health/readiness`，等到返回 `{"status":"UP"}` 再下单。一次正常调用从 **`POST /orders`** 开始；客户端拿到返回的 `id` 后，就能跟踪整笔订单。
+Wait for `http://localhost:8080/actuator/health/readiness` to return `{"status":"UP"}`. Submit an order with `POST /orders` and save the returned `id` to track it.
 
-### 在 PowerShell 中下第一单
+### Place your first order with PowerShell
 
-以下示例可以在同一个 PowerShell 窗口依次运行。每笔新订单生成一个新键；重试同一笔订单时，沿用原来的 `$headers` 和 `$body`。
+Run the commands below in one PowerShell session. Generate a fresh idempotency key for each new order. To retry the same order, reuse both `$headers` and `$body`.
 
 ```powershell
 $api = 'http://localhost:8080'
@@ -98,44 +98,44 @@ Invoke-RestMethod "$api/orders/$id" -Headers $headers
 Invoke-RestMethod "$api/orders/$id/timeline" -Headers $headers
 ```
 
-首次成功创建返回 **HTTP 202 Accepted**，响应示例如下。此时订单已经持久化，仓库确认在后台完成。
+The API returns **HTTP 202 Accepted** once it has persisted the order. Warehouse confirmation happens asynchronously. The example below shows a newly accepted order.
 
 ```json
 {"id":"019a0000-0000-7000-8000-000000000001","warehouse":"A","sku":"BOOK-42","quantity":2,"state":"ACCEPTED"}
 ```
 
-稍后再次执行最后两条查询。订单变为 `CONFIRMED` 后，运行 `Invoke-RestMethod "$warehouse/shipments/$id"` 可核对仓库收到的 SKU 和数量。时间线由 Kafka 异步生成，因此可能短暂返回 `[]` 或晚于订单状态更新。
+Repeat the last two queries to follow the order. Once its state is `CONFIRMED`, run `Invoke-RestMethod "$warehouse/shipments/$id"` to verify the SKU and quantity recorded by the warehouse. The timeline is built asynchronously from Kafka events, so it may briefly return `[]` or lag behind the order state.
 
-### 订单 API · 端口 8080
+### Order API (port 8080)
 
-发送 JSON 请求体时使用 `Content-Type: application/json`。`X-Tenant` 是演示用租户标识；服务按它隔离订单查询。创建订单时，租户标识为 1–100 个字符，幂等键为 1–160 个字符，两者均须包含非空白字符。
+Send JSON request bodies with `Content-Type: application/json`. The demo uses `X-Tenant` to scope order lookups. For order creation, supply a tenant ID of 1–100 characters and an idempotency key of 1–160 characters. Each must contain at least one non-whitespace character.
 
-| 方法和路径 | 请求 | 成功响应 | 常见错误 |
+| Method and path | Request | Success | Common errors |
 |---|---|---|---|
-| `POST /orders` | 必填头 `X-Tenant`、`Idempotency-Key`。JSON 字段 `warehouse` 为 `A` 或 `B`，`sku` 为最多 120 个字符的非空白字符串，`quantity` 为正整数。 | `202`，返回上例的五个字段。同租户、同键、同内容重试返回原订单 ID 和当前状态。 | `400` 缺头或字段无效；`409` 同键用于不同内容；`503` 受理队列暂不可用，可用原键重试。 |
-| `GET /orders/{id}` | 路径参数为订单 UUID；必填头 `X-Tenant`。 | `200`，返回 `id`、`warehouse`、`sku`、`quantity`、`state`。 | `400` 缺头或 UUID 格式错误；`404` 订单不存在或属于其他租户。 |
-| `GET /orders/{id}/timeline` | 同上。 | `200`，按业务顺序返回状态字符串数组，例如 `["ACCEPTED","CONFIRMED"]`。 | 与订单详情相同。 |
-| `GET /warehouses/{id}` | `id` 为 `A` 或 `B`，无需租户头。 | `200`，例如 `{"id":"A","name":"East warehouse"}`。 | `404` 仓库未知；`503` 缓存回源并发已满。 |
+| `POST /orders` | Headers `X-Tenant` and `Idempotency-Key`. The JSON body requires `warehouse` (`A` or `B`), `sku` (a nonblank string up to 120 characters) and `quantity` (a positive integer). | `202` with the five fields shown above. Replaying the same payload with the same tenant and key returns the original order ID and its current state. | `400` for missing headers or invalid input. `409` if the key was used for a different payload. `503` if the admission queue is unavailable. Retry a `503` with the same key. |
+| `GET /orders/{id}` | Order UUID and `X-Tenant` header. | `200` with `id`, `warehouse`, `sku`, `quantity` and `state`. | `400` for a missing header or malformed UUID. `404` if the order is absent or belongs to another tenant. |
+| `GET /orders/{id}/timeline` | Order UUID and `X-Tenant` header. | `200` with a JSON array in business sequence, such as `["ACCEPTED","CONFIRMED"]`. | Same `400` and `404` cases as the order lookup. |
+| `GET /warehouses/{id}` | Warehouse ID `A` or `B`. No headers required. | `200`, for example `{"id":"A","name":"East warehouse"}`. | `404` for an unknown warehouse. `503` when concurrent database fallback requests reach their limit. |
 
-状态含义：`ACCEPTED` 表示平台已受理；`UNCONFIRMED` 表示仓库调用结果暂时未知，Worker 会按原单号查证；`CONFIRMED` 表示平台已确认仓库接单。一次正常履约可以从 `ACCEPTED` 直接到 `CONFIRMED`。
+`ACCEPTED` means the platform has recorded the order. `UNCONFIRMED` means the outcome of a warehouse request is unknown and the worker will look up the original shipment ID. `CONFIRMED` means the platform has verified that the warehouse accepted the shipment. An order can move directly from `ACCEPTED` to `CONFIRMED`.
 
-### 模拟仓库 API · 端口 8082
+### Warehouse simulator API (port 8082)
 
-这些接口无需租户头。发货单使用订单的 `id` 作为 UUID，单笔和批量共用同一个发货单结构：
+Warehouse endpoints accept requests without a tenant header. The shipment UUID is the order ID. Single and batch requests use the shipment object shown below.
 
 ```json
 {"id":"019a0000-0000-7000-8000-000000000001","warehouse":"A","sku":"BOOK-42","quantity":2}
 ```
 
-| 方法和路径 | 请求 | 成功响应与行为 | 常见错误 |
+| Method and path | Request | Success | Errors and retry behavior |
 |---|---|---|---|
-| `POST /shipments` | 请求体是一个发货单对象。 | `200`，空响应体。重复提交相同 ID、仓库、SKU 和数量仍然成功。 | `409` 同一 ID 已记录不同内容。 |
-| `POST /shipments/batch` | 请求体是 1–256 个发货单组成的 JSON 数组，每项使用不同 UUID。 | `200`，空响应体，整批在同一事务中提交。 | `400` 数组为空或超过 256 项；`409` 已有 ID 的内容冲突，整批回滚。 |
-| `GET /shipments/{id}` | 路径参数为发货单 UUID。 | `200`，返回上例的四个字段。 | `400` UUID 格式错误；`404` 仓库查不到该单。 |
-| `PUT /demo/slow/{warehouse}` | 使用 `A` 或 `B`；无需请求体。 | `200`，空响应体。该仓库先提交发货单，再延迟 3.5 秒响应；Worker 的读取超时为 2 秒。批量请求中有一项命中即可触发。 | 开关作用于当前模拟仓库进程，持续到关闭或进程重启。 |
-| `DELETE /demo/slow/{warehouse}` | 使用与开启时相同的仓库编号；无需请求体。 | `200`，空响应体，恢复正常响应速度。 | 可重复关闭。 |
+| `POST /shipments` | One shipment object. | `200` with an empty body. Repeating the same ID, warehouse, SKU and quantity succeeds. | `409` if the ID already has a different payload. |
+| `POST /shipments/batch` | A JSON array of 1–256 shipment objects with distinct UUIDs. | `200` with an empty body. The entire batch commits in one transaction. | `400` for an empty or oversized batch. `409` if a payload conflicts with an existing shipment. A conflict rolls back the entire batch. |
+| `GET /shipments/{id}` | Shipment UUID. | `200` with the four shipment fields shown above. | `400` for a malformed UUID. `404` if the warehouse has no such shipment. |
+| `PUT /demo/slow/{warehouse}` | `A` or `B`, with an empty body. | `200` with an empty body. The simulator commits first, then delays the response by 3.5 seconds. The worker times out after 2 seconds. A batch is delayed if any item targets the selected warehouse. | The setting lasts until you disable it or restart the simulator process. |
+| `DELETE /demo/slow/{warehouse}` | The warehouse ID used to enable the delay, with an empty body. | `200` with an empty body. Restores normal response times. | Safe to repeat. |
 
-例如，在上面 PowerShell 会话中，以下命令用同一笔已确认的订单验证两种提交方式的幂等性：
+After the order is confirmed, use the same PowerShell session to replay its shipment through both submission endpoints.
 
 ```powershell
 $shipment = Invoke-RestMethod "$warehouse/shipments/$id"
@@ -145,19 +145,19 @@ Invoke-RestMethod -Method Post "$warehouse/shipments" -ContentType 'application/
 Invoke-RestMethod -Method Post "$warehouse/shipments/batch" -ContentType 'application/json' -Body $batch
 ```
 
-要演示超时，运行 `Invoke-RestMethod -Method Put "$warehouse/demo/slow/A"`，用新幂等键向 A 仓下单，观察时间线，最后运行 `Invoke-RestMethod -Method Delete "$warehouse/demo/slow/A"`。仓库端按单号去重，平台按单号查证。也可以运行 `python scripts/smoke.py` 自动完成演练和清理。
+To exercise timeout recovery, run `Invoke-RestMethod -Method Put "$warehouse/demo/slow/A"`, submit a new order to warehouse A with a fresh key, and watch its timeline. Restore normal behavior with `Invoke-RestMethod -Method Delete "$warehouse/demo/slow/A"`. The warehouse deduplicates by shipment ID and the worker uses that ID to verify the outcome. To run the drill and cleanup automatically, use `python scripts/smoke.py`.
 
-### 健康检查和指标
+### Health checks and metrics
 
-三个 Java 进程均提供以下 `GET` 路径。本机可通过 8080、8082 访问对应进程，监控组件通过 Compose 网络访问 Worker。无需业务请求头。
+All three Java processes expose these `GET` endpoints without business headers. Use ports 8080 and 8082 for the order API and warehouse simulator on the host. Monitoring services reach the worker over the Compose network.
 
-| 路径 | 用途和返回内容 |
+| Path | Purpose and response |
 |---|---|
-| `/actuator` | 已暴露管理端点的链接目录，返回 JSON。 |
-| `/actuator/health` | 综合健康状态，返回 JSON。 |
-| `/actuator/health/liveness` | 进程存活探针，例如 `{"status":"UP"}`。 |
-| `/actuator/health/readiness` | 应用就绪探针。要验证完整履约链路，可运行上面的端到端演练。 |
-| `/actuator/prometheus` | Prometheus 文本指标，可直接查看，例如 `curl http://localhost:8080/actuator/prometheus`。 |
+| `/actuator` | JSON directory of exposed management endpoints. |
+| `/actuator/health` | Overall health status as JSON. |
+| `/actuator/health/liveness` | Process liveness probe, for example `{"status":"UP"}`. |
+| `/actuator/health/readiness` | Application readiness probe. Use the end-to-end drill above to verify the full fulfillment flow. |
+| `/actuator/prometheus` | Metrics in Prometheus text format. Try `curl http://localhost:8080/actuator/prometheus`. |
 
 ## Observe a failure
 
@@ -192,7 +192,7 @@ Use a fresh run ID for each load run. Each iteration creates an order, reads war
 
 The test offered 2,400 orders/s for 180 seconds with 512 k6 virtual users. The first 60 seconds used a separate tenant for warm-up. The following 120 seconds used the measurement tenant, without restarting k6 or its connections. The full run dropped 4,138 scheduled iterations and therefore failed its overall zero-drop threshold. The measurement tenant recorded 864,006 HTTP responses with zero errors. The final warehouse confirmation arrived 76 ms after the final admission. [Every measured second](benchmarks/2026-11-07/steady-2400/seconds.txt) · [Warehouse and timeline reconciliation](benchmarks/2026-11-07/steady-2400/reconciliation.txt) · [k6 summary](benchmarks/2026-11-07/steady-2400/results.txt)
 
-For reproduction, first confirm a preflight order is visible in the warehouse and timeline. On a warmed single-host Linux stack, run the following with a fresh run ID:
+For reproduction, first confirm a preflight order is visible in the warehouse and timeline. On a warmed single-host Linux stack, run the following with a fresh run ID.
 
 ```sh
 k6 run -e RUN_ID=steady-001 -e RATE=2400 -e DURATION=180s -e WARM_SECONDS=60 \
