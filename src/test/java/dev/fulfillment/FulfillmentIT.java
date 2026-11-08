@@ -141,8 +141,8 @@ class FulfillmentIT {
     }
 
     private long tasksFor(UUID order) {
-        return em.createNativeQuery("SELECT count(*) FROM work_item WHERE order_id=:id AND kind='SHIP_B'",Long.class)
-            .setParameter("id",order).getSingleResult();
+        return ((Number)em.createNativeQuery("SELECT count(*) FROM work_item WHERE order_id=:id AND kind='SHIP_B'")
+            .setParameter("id",order).getSingleResult()).longValue();
     }
 
     private KafkaProducer<byte[],byte[]> sender() {
