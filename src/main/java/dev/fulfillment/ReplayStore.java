@@ -61,8 +61,18 @@ class ReplayStore {
             if (identical != 1) throw new IllegalStateException("Source coordinate already replayed with another payload");
             return false;
         }
-        if (dispatch) batches.dispatch(List.of(event));
-        else batches.project(List.of(event));
+        if (dispatch) {
+            batches.dispatch(List.of(event));
+        } else {
+            batches.project(List.of(event));
+            // The normal projection ignores duplicate event IDs. A manual correction
+            // must also agree with the row that owns that ID before we issue a receipt.
+            Number matches = (Number)em.createNativeQuery("""
+                SELECT count(*) FROM timeline WHERE event_id=:id AND order_id=:ord AND state=:state
+                """).setParameter("id",event.id()).setParameter("ord",event.orderId())
+                .setParameter("state",event.state()).getSingleResult();
+            if (matches.longValue() != 1) throw new IllegalStateException("Event ID conflicts with existing timeline entry");
+        }
         return true;
     }
 }

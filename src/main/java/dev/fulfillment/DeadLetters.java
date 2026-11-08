@@ -35,6 +35,10 @@ class DeadLetters implements AutoCloseable {
     @Bean DefaultErrorHandler errors(MeterRegistry metrics,
             @Value("${app.timeline-group:fulfillment-timeline-v1}") String timelineGroup) {
         var groups = Map.of(DISPATCH_GROUP, DISPATCH, timelineGroup, TIMELINE);
+        groups.keySet().forEach(group -> {
+            metrics.counter("fulfillment.dlt.published", "group", group);
+            metrics.counter("fulfillment.dlt.publish.errors", "group", group);
+        });
         var recoverer = new DeadLetterPublishingRecoverer(publisher, (record, failure) -> {
             for (Throwable t = failure; t != null; t = t.getCause()) {
                 if (t instanceof ListenerExecutionFailedException listener && listener.getGroupId() != null) {
@@ -54,6 +58,9 @@ class DeadLetters implements AutoCloseable {
                 recoverer.accept(record, consumer, failure);
             } catch (RuntimeException sendFailure) {
                 metrics.counter("fulfillment.dlt.publish.errors","group",group).increment();
+                // Synchronous broker rejections can return immediately. Pace redelivery
+                // while leaving the source offset untouched.
+                java.util.concurrent.locks.LockSupport.parkNanos(Duration.ofSeconds(1).toNanos());
                 throw sendFailure;
             }
             metrics.counter("fulfillment.dlt.published","group",group).increment();

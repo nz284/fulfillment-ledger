@@ -6,3 +6,7 @@ groups:
         for: 30s
         labels: {severity: warning}
         annotations: {summary: "An accepted order has waited over five minutes for warehouse confirmation"}
+      - alert: FulfillmentDeadLetterWriteFailed
+        expr: sum by (group) (increase(fulfillment_dlt_publish_errors_total[5m])) > 0
+        labels: {severity: warning}
+        annotations: {summary: "Kafka rejected a dead-letter write; the consumer must retry before advancing"}

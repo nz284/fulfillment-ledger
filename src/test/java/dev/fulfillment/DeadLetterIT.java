@@ -101,10 +101,11 @@ class DeadLetterIT {
 
     @Test void isolatesPoisonAndReplaysOnlyTheSelectedProjection() throws Exception {
         UUID a=seedOrder(), b=seedOrder(), c=seedOrder();
+        UUID firstEventId=UUID.randomUUID();
         byte[] poison={(byte)0xff,0,42};
         long offset;
         try (var p=sender()) {
-            send(p,1,a,json.writeValueAsBytes(new Event(UUID.randomUUID(),a,"ACCEPTED")));
+            send(p,1,a,json.writeValueAsBytes(new Event(firstEventId,a,"ACCEPTED")));
             var bad=send(p,1,b,poison);
             send(p,1,c,json.writeValueAsBytes(new Event(UUID.randomUUID(),c,"ACCEPTED"))).get();
             offset=bad.get().offset();
@@ -124,6 +125,8 @@ class DeadLetterIT {
             assertEquals("CONFIRMED",ledger.get(c).state());
         });
         int requestsBefore=warehouse.getAllServeEvents().size();
+        assertThrows(IllegalStateException.class,()->replays.replay(timeline,
+            json.writeValueAsBytes(new Event(firstEventId,b,"ACCEPTED"))));
         byte[] repair=json.writeValueAsBytes(new Event(UUID.randomUUID(),b,"ACCEPTED"));
         try(var reader=readers.createConsumer("test-replay",null,null)) {
             var selected=ReplayCommand.read(reader,new TopicPartition(timeline.topic(),1),timeline.offset());

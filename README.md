@@ -226,6 +226,8 @@ The one-shot command manually reads exactly one retained DLT record. It validate
 
 Monitor `fulfillment_dlt_published_total` for isolated records and `fulfillment_dlt_publish_errors_total` for failed recovery writes. Both counters are labeled by consumer group.
 
+The `FulfillmentDeadLetterWriteFailed` Prometheus rule flags increases in failed DLT writes. Check broker availability, topic partitions, permissions and message-size limits before retrying. When expanding source partitions, expand both DLTs as well. DLT entries remain available according to Kafka retention.
+
 ### Tracing warehouse failures
 
 ```sh
@@ -254,6 +256,14 @@ python scripts/reconcile.py baseline-001
 Use a fresh run ID for each load run. Each iteration creates an order, reads warehouse metadata and queries the order.
 
 ### Measured throughput
+
+**DLT-enabled regression runs.** All measured orders matched warehouse records and projected timelines. Each run used 60 seconds of warm-up followed by a fixed 120-second measurement window. The averages exceeded 2,000 confirmations/s, but every run had individual seconds below target. The consecutive-second result in the earlier benchmark below predates the DLT feature.
+
+| WAL budget | Reconciled orders | End-to-end confirmations/s | Seconds below 2,000 of 120 |
+|---|---:|---:|---:|
+| [2 GiB, first trial](benchmarks/2026-11-08-dlt/wal2-trial1) | 280,231 | 2,333.27 | 6 |
+| [2 GiB, second trial](benchmarks/2026-11-08-dlt/wal2-trial2) | 285,032 | 2,373.06 | 5 |
+| [8 GiB, comparison](benchmarks/2026-11-08-dlt/wal8-trial) | 284,206 | 2,366.42 | 3 |
 
 **120 consecutive seconds above 2,000 warehouse confirmations/s.** In the steady-state test, the lowest second contained **2,174** confirmations. All 288,002 measured orders matched warehouse records and the Kafka timeline. Throughput from the first admission through the last confirmation was **2,398.60 orders/s**. Warehouse confirmation P99 was **167 ms**; order creation P99 was **47 ms**.
 
