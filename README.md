@@ -19,9 +19,7 @@ The script activates a slow response for warehouse A, submits the same order twi
 ACCEPTED → UNCONFIRMED → CONFIRMED
 ```
 
-## Architecture
-
-### Two-worker crash and takeover drill
+## Two-worker crash and takeover drill
 
 Run `python scripts/takeover.py` from the repository root with Python 3.9+ and Docker Compose 2.24.4+. The drill starts a disposable stack with two workers, private data volumes and dynamically assigned loopback ports. It removes that stack on exit. The regular demo can run independently.
 
@@ -31,6 +29,10 @@ Run `python scripts/takeover.py` from the repository root with Python 3.9+ and D
 4. The drill checks both order timelines, two lease attempts for A, one committed warehouse submission, one matching shipment row, and one confirmation. It prints the remaining lease time at the crash, crash-to-confirmation time and B's admission-to-confirmation latency. The report also records whether B finished before A recovered.
 
 The crash timer starts immediately before sending the kill command. Durations use PostgreSQL timestamps. Set `TAKEOVER_REPORT` to a file path to save the JSON result. The GitHub Actions verification workflow publishes this file as the **takeover-report** artifact.
+
+In the first verified run, A was confirmed 28.863 seconds after the crash. Its original lease had 28.705 seconds remaining when the kill command began. The warehouse recorded one submission and one shipment. B, submitted after the crash, took 45.411 seconds to confirm and finished after A. These are single-order measurements from this run. [CI run and report](https://github.com/nz284/fulfillment-ledger/actions/runs/42436180750)
+
+## Architecture
 
 ```mermaid
 flowchart LR
