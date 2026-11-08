@@ -21,6 +21,17 @@ ACCEPTED → UNCONFIRMED → CONFIRMED
 
 ## Architecture
 
+### Two-worker crash and takeover drill
+
+Run `python scripts/takeover.py` from the repository root with Python 3.9+ and Docker Compose 2.24.4+. The drill starts a disposable stack with two workers, private data volumes and dynamically assigned loopback ports. It removes that stack on exit. The regular demo can run independently.
+
+1. Both workers join Kafka. The script submits an order to warehouse A and uses a test-only PostgreSQL advisory lock to hold the first worker inside its confirmation transaction.
+2. The script reads the committed shipment from warehouse A, verifies that the order API still reports `ACCEPTED`, identifies the blocked worker from its database connection, and sends that container `SIGKILL`.
+3. While the worker is down, the script submits an order to warehouse B. After A's original lease expires, the surviving worker looks up the existing shipment and confirms the order.
+4. The drill checks both order timelines, two lease attempts for A, one committed warehouse submission, one matching shipment row, and one confirmation. It prints the remaining lease time at the crash, crash-to-confirmation time and B's admission-to-confirmation latency. The report also records whether B finished before A recovered.
+
+The crash timer starts immediately before sending the kill command. Durations use PostgreSQL timestamps. Set `TAKEOVER_REPORT` to a file path to save the JSON result. The GitHub Actions verification workflow publishes this file as the **takeover-report** artifact.
+
 ```mermaid
 flowchart LR
   Client --> API

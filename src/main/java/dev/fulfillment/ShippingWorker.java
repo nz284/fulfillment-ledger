@@ -77,6 +77,7 @@ class ShippingWorker {
         try {
             Shipment found=client.get().uri("/shipments/{id}",expected.id()).retrieve().body(Shipment.class);
             if (!expected.equals(found)) throw new RestClientException("Conflicting warehouse record");
+            Audit.info("warehouse.lookup.matched",expected.id(),expected.warehouse());
             return true;
         } catch (HttpClientErrorException.NotFound missing) { return false; }
     }

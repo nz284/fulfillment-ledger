@@ -53,6 +53,7 @@ class WarehouseApi {
     @PostMapping("/shipments")
     void submit(@RequestBody Shipment s) throws InterruptedException {
         book.accept(s);
+        Audit.info("shipment.submit.committed",s.id(),s.warehouse());
         // Commit first: the client may time out while the shipment already exists.
         if (slow.contains(s.warehouse())) Thread.sleep(3500);
     }

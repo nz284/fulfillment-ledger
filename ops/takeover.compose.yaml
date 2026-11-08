@@ -1,0 +1,8 @@
+# Run only with scripts/takeover.py and its unique Compose project name.
+services:
+  api:
+    ports: !override ["127.0.0.1::8080"]
+  warehouse:
+    ports: !override ["127.0.0.1::8080"]
+  worker:
+    restart: "no"
