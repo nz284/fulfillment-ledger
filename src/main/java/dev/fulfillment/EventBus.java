@@ -28,6 +28,8 @@ class KafkaConfig {
 @Profile("worker")
 class EventBus {
     static final String TOPIC = "fulfillment.events.v1";
+    private static final org.slf4j.Logger timings =
+        org.slf4j.LoggerFactory.getLogger("fulfillment.dispatch.timing");
     private final BatchStore batches;
     private final KafkaTemplate<String,String> kafka;
     private final ObjectMapper mapper;
@@ -42,7 +44,13 @@ class EventBus {
         try {
             var sends = claims.stream().map(item -> {
                 Event event = new Event(item.id(),item.orderId(),item.payload());
-                return kafka.send(TOPIC,item.orderId().toString(),mapper.writeValueAsString(event));
+                var send=kafka.send(TOPIC,item.orderId().toString(),mapper.writeValueAsString(event));
+                if (timings.isDebugEnabled() && event.state().equals("ACCEPTED")) {
+                    return send.thenAccept(result -> timings.atDebug().addKeyValue("event","dispatch.acked")
+                        .addKeyValue("fulfillment_id",event.orderId())
+                        .addKeyValue("partition",result.getRecordMetadata().partition()).log("dispatch.acked"));
+                }
+                return send;
             }).toArray(CompletableFuture[]::new);
             CompletableFuture.allOf(sends).get(6,TimeUnit.SECONDS);
             batches.published(claims);
@@ -54,7 +62,16 @@ class EventBus {
     }
 
     @KafkaListener(topics=TOPIC,groupId="fulfillment-dispatch-v1")
-    void dispatch(List<String> data) { batches.dispatch(decode(data)); }
+    void dispatch(List<String> data) {
+        var events=decode(data);
+        if (timings.isDebugEnabled()) {
+            for (Event event : events) {
+                if (event.state().equals("ACCEPTED")) timings.atDebug().addKeyValue("event","dispatch.received")
+                    .addKeyValue("fulfillment_id",event.orderId()).log("dispatch.received");
+            }
+        }
+        batches.dispatch(events);
+    }
 
     @KafkaListener(topics=TOPIC,groupId="${app.timeline-group:fulfillment-timeline-v1}")
     void project(List<String> data) { batches.project(decode(data)); }

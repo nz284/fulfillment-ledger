@@ -5,6 +5,8 @@ from pathlib import Path
 import subprocess
 import time
 import uuid
+
+import takeover_latency
 from urllib.error import URLError
 from urllib.request import Request, urlopen
 
@@ -105,30 +107,37 @@ def run():
         until("Kafka listener startup", lambda: "partitions assigned" in command("docker", "logs", worker))
     install_gate()
 
-    def submit(site):
-        payload = {"warehouse": site, "sku": "takeover-" + site, "quantity": 2}
+    def submit(site, sku=None):
+        payload = {"warehouse": site, "sku": sku or "takeover-" + site, "quantity": 2}
         order_id = str(uuid.UUID(http(api + "/orders", payload)["id"]))
         return order_id, {"id": order_id, **payload}
 
-    a, expected = submit("A")
-    owner_ip = until("first worker reaching the confirmation gate", lambda: sql(f"""
-        SELECT host(s.client_addr) FROM pg_stat_activity s JOIN pg_locks l ON l.pid=s.pid
-        WHERE l.locktype='advisory' AND l.objid={LOCK} AND NOT l.granted
-    """))
-    owner = by_ip[owner_ip]
-    survivor = next(worker for worker in workers if worker != owner)
-    require(http(warehouse + "/shipments/" + a) == expected, "warehouse A did not commit the payload")
-    require(http(api + "/orders/" + a)["state"] == "ACCEPTED", "platform confirmed before crash")
-    task = f"FROM work_item WHERE order_id='{a}' AND kind='SHIP_A'"
-    require(sql("SELECT attempts " + task) == "1", "expected first lease")
-    lease_end = sql("SELECT extract(epoch FROM available_at) " + task)
-    crash = sql("SELECT extract(epoch FROM clock_timestamp())")
-    command("docker", "kill", "--signal=KILL", owner)
-    require(command("docker", "inspect", "-f", "{{.State.ExitCode}}", owner) == "137",
-            "owner did not exit on SIGKILL")
-    require(sql("SELECT pg_terminate_backend(pid) FROM pg_stat_activity "
-                "WHERE application_name='takeover-gate-holder'") == "t", "gate holder missing")
-    b, expected_b = submit("B")
+    warm, _ = submit("B")
+    until("preflight confirmed", lambda: http(api + "/orders/" + warm)["state"] == "CONFIRMED")
+    takeover_latency.install(sql)
+    with takeover_latency.Traffic(submit) as traffic:
+        time.sleep(12)
+        a, expected = submit("A")
+        owner_ip = until("first worker reaching the confirmation gate", lambda: sql(f"""
+            SELECT host(s.client_addr) FROM pg_stat_activity s JOIN pg_locks l ON l.pid=s.pid
+            WHERE l.locktype='advisory' AND l.objid={LOCK} AND NOT l.granted
+        """))
+        owner = by_ip[owner_ip]
+        survivor = next(worker for worker in workers if worker != owner)
+        require(http(warehouse + "/shipments/" + a) == expected, "warehouse A did not commit the payload")
+        require(http(api + "/orders/" + a)["state"] == "ACCEPTED", "platform confirmed before crash")
+        task = f"FROM work_item WHERE order_id='{a}' AND kind='SHIP_A'"
+        require(sql("SELECT attempts " + task) == "1", "expected first lease")
+        lease_end = sql("SELECT extract(epoch FROM available_at) " + task)
+        crash = sql("SELECT extract(epoch FROM clock_timestamp())")
+        crash_clock = time.monotonic()
+        command("docker", "kill", "--signal=KILL", owner)
+        require(command("docker", "inspect", "-f", "{{.State.ExitCode}}", owner) == "137",
+                "owner did not exit on SIGKILL")
+        require(sql("SELECT pg_terminate_backend(pid) FROM pg_stat_activity "
+                    "WHERE application_name='takeover-gate-holder'") == "t", "gate holder missing")
+        b, expected_b = submit("B")
+        time.sleep(max(0, crash_clock + 50 - time.monotonic()))
     for order_id in (a, b):
         until("confirmation for " + order_id, lambda: http(api + "/orders/" + order_id)["state"] == "CONFIRMED")
         until("timeline for " + order_id, lambda: http(api + "/orders/" + order_id + "/timeline")
@@ -157,7 +166,11 @@ def run():
               "remaining_lease_at_crash_s": round(float(lease_end) - float(crash), 3),
               "warehouse_b_confirmation_s": round(b_done - b_start, 3),
               "warehouse_b_confirmed_before_recovery": b_done < a_done}
+    latency = takeover_latency.report(traffic.ids, crash, sql,
+                                      {worker: command("docker", "logs", worker) for worker in workers}, until)
+    report["b_latency"] = {phase: latency[phase] for phase in ("normal", "fault")}
     print(json.dumps(report, indent=2), flush=True)
+    report["b_trace"] = latency
     if path := os.environ.get("TAKEOVER_REPORT"):
         Path(path).write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
 

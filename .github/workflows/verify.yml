@@ -17,11 +17,14 @@ jobs:
       - name: Stop smoke stack before the two-worker drill
         run: docker compose down
       - name: Kill the lease owner and verify takeover
-        run: TAKEOVER_REPORT=takeover-report.json python3 scripts/takeover.py
+        run: |
+          for trial in 1 2; do
+            TAKEOVER_REPORT="takeover-report-$trial.json" python3 scripts/takeover.py
+          done
       - uses: actions/upload-artifact@v4
         with:
           name: takeover-report
-          path: takeover-report.json
+          path: takeover-report-*.json
       - if: failure()
         run: docker compose logs --tail 80
       - if: always()
