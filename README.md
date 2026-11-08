@@ -36,9 +36,22 @@ In the JSON report, `b_trace.orders` contains the per-order timestamps (epoch se
 
 In the first verified run, A was confirmed 28.863 seconds after the crash. Its original lease had 28.705 seconds remaining when the kill command began. The warehouse recorded one submission and one shipment. B, submitted after the crash, took 45.411 seconds to confirm and finished after A. These are single-order measurements from this run. [CI run and report](https://github.com/nz284/fulfillment-ledger/actions/runs/42436180750)
 
-## Architecture
+### Warehouse B recovery latency
 
-The two instrumented baseline trials placed B's post-crash P95 between 30.11 and 42.09 seconds. The interval from Kafka acknowledgement to dispatch listener receipt accounted for 30.03 and 42.02 seconds at P95. In both trials the task creation-to-claim P95 stayed below 18 ms. The worker now uses Kafka classic consumer groups with a 9-second session timeout and a 2-second heartbeat interval. A broker can therefore reassign a departed consumer's partitions sooner. A shorter timeout also makes a prolonged network or JVM pause more likely to trigger reassignment. Deployments can override `KAFKA_SESSION_TIMEOUT_MS` and `KAFKA_HEARTBEAT_MS` within their broker's allowed range. The separate PostgreSQL task lease remains 30 seconds. CI checks B's fault-window P95 against a 15-second budget. [Baseline trials](https://github.com/nz284/fulfillment-ledger/actions/runs/42436928412)
+Each trial used the same B traffic pattern and killed one of two workers. Times below run from order admission to warehouse confirmation. Each baseline or tuned trial included 26 pre-crash and 100 post-crash probes.
+
+| Kafka session timeout | Trial | Pre-crash P95 | Pre-crash max | Post-crash P95 | Post-crash max |
+|---|---:|---:|---:|---:|---:|
+| 45 s | 1 | 79 ms | 340 ms | 42.09 s | 45.09 s |
+| 45 s | 2 | 176 ms | 259 ms | 30.11 s | 43.11 s |
+| 9 s | 1 | 81 ms | 205 ms | 2.58 s | 9.08 s |
+| 9 s | 2 | 113 ms | 265 ms | 1.10 s | 8.60 s |
+
+The slowest baseline orders landed on partitions owned by the killed worker. The survivor acquired those partitions 45.19 and 45.37 seconds after the crash. Kafka acknowledgement to dispatch listener receipt accounted for 42.02 and 30.03 seconds at P95. Once dispatch created a task, its P95 wait for a worker stayed below 18 ms in both baseline trials. [Baseline traces and CI results](https://github.com/nz284/fulfillment-ledger/actions/runs/42436928412)
+
+The worker now uses a 9-second classic Kafka session timeout and a 2-second heartbeat. A prolonged network or JVM pause can therefore trigger reassignment sooner. Deployments can override `KAFKA_SESSION_TIMEOUT_MS` and `KAFKA_HEARTBEAT_MS` within the broker's allowed range. Both tuned trials passed the 15-second B fault-window P95 check. A's independent 30-second database lease produced recovery times of 29.44 and 29.41 seconds, with one committed shipment in each trial. [Tuned traces and CI results](https://github.com/nz284/fulfillment-ledger/actions/runs/42437515991)
+
+## Architecture
 
 ```mermaid
 flowchart LR
