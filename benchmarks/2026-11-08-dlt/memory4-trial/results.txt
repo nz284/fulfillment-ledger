@@ -1,0 +1,38 @@
+
+
+  █ TOTAL RESULTS 
+
+    checks_total.......: 427940  2377.232208/s
+    checks_succeeded...: 100.00% 427940 out of 427940
+    checks_failed......: 0.00%   0 out of 427940
+
+    ✓ accepted
+
+    HTTP
+    http_req_duration.....................: avg=7.63ms  med=1.55ms  p(95)=22.84ms p(99)=34.48ms max=1.62s   
+      { expected_response:true }..........: avg=7.63ms  med=1.55ms  p(95)=22.84ms p(99)=34.48ms max=1.62s   
+      { name:create,phase:measurement }...: avg=19.09ms med=17.73ms p(95)=30.31ms p(99)=53.31ms max=161.96ms
+      { name:create }.....................: avg=19.51ms med=16.33ms p(95)=29.34ms p(99)=58.16ms max=1.62s   
+    http_req_failed.......................: 0.00%   0 out of 1283820
+      { phase:measurement }...............: 0.00%   0 out of 864000
+    http_reqs.............................: 1283820 7131.696625/s
+
+    EXECUTION
+    dropped_iterations....................: 4062    22.564652/s
+    iteration_duration....................: avg=23.15ms med=19.25ms p(95)=33.85ms p(99)=65.9ms  max=1.91s   
+    iterations............................: 427940  2377.232208/s
+    vus...................................: 49      min=23           max=512
+    vus_max...............................: 512     min=512          max=512
+
+    NETWORK
+    data_received.........................: 250 MB  1.4 MB/s
+    data_sent.............................: 222 MB  1.2 MB/s
+
+
+
+time="2026-11-08T17:13:45-05:00" level=error msg="thresholds on metrics 'dropped_iterations' have been crossed"
+   state   | count  
+-----------+--------
+ CONFIRMED | 288000
+(1 row)
+

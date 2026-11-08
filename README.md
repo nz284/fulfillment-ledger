@@ -257,13 +257,14 @@ Use a fresh run ID for each load run. Each iteration creates an order, reads war
 
 ### Measured throughput
 
-**DLT-enabled regression runs.** All measured orders matched warehouse records and projected timelines. Each run used 60 seconds of warm-up followed by a fixed 120-second measurement window. The averages exceeded 2,000 confirmations/s, but every run had individual seconds below target. The consecutive-second result in the earlier benchmark below predates the DLT feature.
+**DLT-enabled regression runs.** Each run used 60 seconds of warm-up and a fixed 120-second measurement window. All measured orders matched warehouse records and projected timelines. At the original 3.125 GiB memory high watermark, each run had individual seconds below target. A final single-host run of commit `5a6f8c9` used a 4 GiB memory high watermark and a 4.75 GiB ceiling for the stack and load generator together. With the 2 GiB WAL budget restored, its slowest measured second reached **2,091 confirmations**. The measurement window completed 288,000 orders and 864,000 HTTP requests with zero HTTP errors. Across the full 180 seconds k6 dropped 4,062 scheduled iterations, so the full-run zero-drop check failed.
 
 | WAL budget | Reconciled orders | End-to-end confirmations/s | Seconds below 2,000 of 120 |
 |---|---:|---:|---:|
 | [2 GiB, first trial](benchmarks/2026-11-08-dlt/wal2-trial1) | 280,231 | 2,333.27 | 6 |
 | [2 GiB, second trial](benchmarks/2026-11-08-dlt/wal2-trial2) | 285,032 | 2,373.06 | 5 |
 | [8 GiB, comparison](benchmarks/2026-11-08-dlt/wal8-trial) | 284,206 | 2,366.42 | 3 |
+| [2 GiB, higher memory budget](benchmarks/2026-11-08-dlt/memory4-trial) | 288,000 | 2,398.72 | 0 |
 
 **120 consecutive seconds above 2,000 warehouse confirmations/s.** In the steady-state test, the lowest second contained **2,174** confirmations. All 288,002 measured orders matched warehouse records and the Kafka timeline. Throughput from the first admission through the last confirmation was **2,398.60 orders/s**. Warehouse confirmation P99 was **167 ms**; order creation P99 was **47 ms**.
 
