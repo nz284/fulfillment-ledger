@@ -40,13 +40,28 @@ class BatchStore {
     }
 
     void dispatch(List<Event> events) {
-        em.createNativeQuery("""
+        long expected = events.stream().filter(e -> e.state().equals("ACCEPTED")).count();
+        if (expected == 0) return;
+        String batch = json.writeValueAsString(events);
+        int inserted = em.createNativeQuery("""
             INSERT INTO work_item(id,order_id,kind,payload)
             SELECT o.id,o.id,'SHIP_'||o.warehouse,'submit'
             FROM jsonb_to_recordset(cast(:batch as jsonb)) AS b("orderId" uuid,state text)
             JOIN fulfillment_order o ON o.id=b."orderId" WHERE b.state='ACCEPTED'
             ON CONFLICT DO NOTHING
-            """).setParameter("batch",json.writeValueAsString(events)).executeUpdate();
+            """).setParameter("batch",batch).executeUpdate();
+        if (inserted < expected) {
+            // A duplicate task is successful. An absent source order must be retried.
+            List<java.util.UUID> missing = em.createNativeQuery("""
+                SELECT cast(item->>'orderId' AS uuid)
+                FROM jsonb_array_elements(cast(:batch AS jsonb)) WITH ORDINALITY AS b(item,pos)
+                WHERE item->>'state'='ACCEPTED' AND NOT EXISTS (
+                    SELECT 1 FROM work_item w WHERE w.id=cast(item->>'orderId' AS uuid)
+                    AND w.kind IN ('SHIP_A','SHIP_B'))
+                ORDER BY pos LIMIT 1
+                """,java.util.UUID.class).setParameter("batch",batch).getResultList();
+            if (!missing.isEmpty()) throw new MissingOrder(missing.getFirst());
+        }
     }
 
     void project(List<Event> events) {

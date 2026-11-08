@@ -9,19 +9,17 @@ import org.springframework.context.annotation.*;
 import org.springframework.kafka.annotation.KafkaListener;
 import org.springframework.kafka.config.TopicBuilder;
 import org.springframework.kafka.core.KafkaTemplate;
-import org.springframework.kafka.listener.DefaultErrorHandler;
+import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
-import org.springframework.util.backoff.FixedBackOff;
+
 import tools.jackson.databind.ObjectMapper;
 
 @Configuration
 @Profile("worker")
 class KafkaConfig {
     @Bean NewTopic events() { return TopicBuilder.name(EventBus.TOPIC).partitions(6).build(); }
-    @Bean DefaultErrorHandler errors() {
-        return new DefaultErrorHandler(new FixedBackOff(Duration.ofSeconds(2).toMillis(),FixedBackOff.UNLIMITED_ATTEMPTS));
-    }
+
 }
 
 @Component
@@ -31,10 +29,11 @@ class EventBus {
     private static final org.slf4j.Logger timings =
         org.slf4j.LoggerFactory.getLogger("fulfillment.dispatch.timing");
     private final BatchStore batches;
+    private final EventConsumer consumer;
     private final KafkaTemplate<String,String> kafka;
     private final ObjectMapper mapper;
-    EventBus(BatchStore batches, KafkaTemplate<String,String> kafka, ObjectMapper mapper) {
-        this.batches=batches; this.kafka=kafka; this.mapper=mapper;
+    EventBus(BatchStore batches, KafkaTemplate<String,String> kafka, ObjectMapper mapper, EventConsumer consumer) {
+        this.consumer=consumer; this.batches=batches; this.kafka=kafka; this.mapper=mapper;
     }
 
     @Scheduled(fixedDelayString="${app.poll-ms:5}")
@@ -61,22 +60,9 @@ class EventBus {
         }
     }
 
-    @KafkaListener(topics=TOPIC,groupId="fulfillment-dispatch-v1")
-    void dispatch(List<String> data) {
-        var events=decode(data);
-        if (timings.isDebugEnabled()) {
-            for (Event event : events) {
-                if (event.state().equals("ACCEPTED")) timings.atDebug().addKeyValue("event","dispatch.received")
-                    .addKeyValue("fulfillment_id",event.orderId()).log("dispatch.received");
-            }
-        }
-        batches.dispatch(events);
-    }
+    @KafkaListener(topics=TOPIC, groupId=DeadLetters.DISPATCH_GROUP)
+    void dispatch(List<ConsumerRecord<byte[],byte[]>> records) { consumer.dispatch(records); }
 
-    @KafkaListener(topics=TOPIC,groupId="${app.timeline-group:fulfillment-timeline-v1}")
-    void project(List<String> data) { batches.project(decode(data)); }
-
-    private List<Event> decode(List<String> records) {
-        return records.stream().map(data -> mapper.readValue(data,Event.class)).toList();
-    }
+    @KafkaListener(topics=TOPIC, groupId="${app.timeline-group:fulfillment-timeline-v1}")
+    void project(List<ConsumerRecord<byte[],byte[]>> records) { consumer.project(records); }
 }

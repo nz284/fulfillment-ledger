@@ -8,6 +8,7 @@ import org.springframework.scheduling.annotation.EnableScheduling;
 @EnableScheduling
 public class Application {
     public static void main(String[] args) {
-        SpringApplication.run(Application.class, args);
+        var context = SpringApplication.run(Application.class, args);
+        if (context.getEnvironment().matchesProfiles("dlt-replay")) context.close();
     }
 }

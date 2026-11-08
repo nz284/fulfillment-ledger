@@ -193,6 +193,41 @@ All three Java processes expose these `GET` endpoints without business headers. 
 
 ## Observe a failure
 
+### Kafka dead letters and targeted replay
+
+The six-partition source topic feeds two independent consumers. Dispatch failures go to `fulfillment.dispatch.dlt`; timeline failures go to `fulfillment.timeline.dlt`. Each DLT has six partitions. A DLT entry preserves the original key and payload bytes, source topic, partition, offset, consumer group and exception headers. Identify a failure by **source topic, partition, offset and group**. A crash after the DLT write and before source-offset commit can produce more than one DLT entry for that identity.
+
+| Failure | Behavior |
+|---|---|
+| Invalid JSON, missing event fields or an unknown state | Commit any valid batch prefix, publish the failing record to its group's DLT, then resume consumption. |
+| A valid dispatch event refers to an absent order | Roll back the batch, persist the valid prefix, and retry the individual record twice at one-second intervals before dead-lettering it. |
+| A batch cannot commit because PostgreSQL is unavailable | Retry without advancing past the uncommitted work. |
+| Kafka rejects the DLT write | Keep the source offset eligible for delivery. Successful broker acknowledgement is required before skipping the failed record. |
+| Warehouse response is lost | Keep the order in the existing lookup-before-resubmit recovery flow. |
+
+Inspect one DLT using the Kafka CLI inside the broker container. The printed **DLT partition and offset** select the entry to replay. The original coordinates in its headers identify the failure for deduplication.
+
+```sh
+docker compose exec kafka /opt/kafka/bin/kafka-console-consumer.sh \
+  --bootstrap-server kafka:9092 --topic fulfillment.timeline.dlt --from-beginning \
+  --property print.partition=true --property print.offset=true --property print.key=true \
+  --property print.headers=true
+```
+
+For a malformed event, save the corrected JSON object in `repair.json`. Supply its stable event `id`, original `orderId` and the intended `state`. For an order that was temporarily missing, restore the order first and omit the file option to retry the original payload. Substitute the DLT coordinates you inspected:
+
+```sh
+docker compose run --rm --no-deps -e SPRING_PROFILES_ACTIVE=dlt-replay \
+  -v "./repair.json:/repair/event.json:ro" worker \
+  --topic=fulfillment.timeline.dlt --partition=1 --offset=0 --file=/repair/event.json
+```
+
+The one-shot command manually reads exactly one retained DLT record. It validates the headers, target group and original key, then invokes only the affected database handler. Timeline repair updates the timeline; dispatch repair can create a durable shipping task. The replay receipt in `dead_letter_replay` commits in the same transaction. Repeating the same repair is idempotent. A conflicting repair for an already applied source coordinate fails. Use the same `APP_TIMELINE_GROUP` as the originating worker when replaying a custom timeline group. Source offsets and DLT offsets are independent; replay does not reset a live consumer group.
+
+Monitor `fulfillment_dlt_published_total` for isolated records and `fulfillment_dlt_publish_errors_total` for failed recovery writes. Both counters are labeled by consumer group.
+
+### Tracing warehouse failures
+
 ```sh
 docker compose --profile observe up -d
 ```
