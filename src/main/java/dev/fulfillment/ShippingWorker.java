@@ -31,12 +31,18 @@ class ShippingWorker {
         this.client=builder.baseUrl(url).requestFactory(factory).build();
     }
 
-    @Scheduled(fixedDelayString="${app.poll-ms:5}") void east() { drain("A"); }
-    @Scheduled(fixedDelayString="${app.poll-ms:5}") void west() { drain("B"); }
+    // A fixed-delay lane has one caller. Idle recovery scans can run less often
+    // than fresh dispatch without delaying a full queue of due retries.
+    private long nextEastLookup = System.nanoTime();
+    private long nextWestLookup = System.nanoTime();
+    @Scheduled(fixedDelayString="${app.poll-ms:5}") void east() { nextEastLookup=drain("A",nextEastLookup); }
+    @Scheduled(fixedDelayString="${app.poll-ms:5}") void west() { nextWestLookup=drain("B",nextWestLookup); }
 
-    private void drain(String warehouse) {
+    private long drain(String warehouse, long nextLookup) {
         submitFresh(warehouse);
-        recoverOne(warehouse);
+        if (System.nanoTime()-nextLookup < 0) return nextLookup;
+        boolean hadWork=recoverOne(warehouse);
+        return System.nanoTime() + (hadWork ? 0 : java.util.concurrent.TimeUnit.MILLISECONDS.toNanos(100));
     }
 
     private void submitFresh(String warehouse) {
@@ -64,11 +70,11 @@ class ShippingWorker {
         return client.post().uri("/shipments").body(shipment).retrieve().toBodilessEntity();
     }
 
-    private void recoverOne(String warehouse) {
+    private boolean recoverOne(String warehouse) {
         try (var lookup=circuits.reserve(warehouse, WarehouseCircuits.Operation.LOOKUP)) {
-            if (lookup==null) return;
+            if (lookup==null) return false;
             var claims=batches.claimForLookup(warehouse);
-            if (claims.isEmpty()) return;
+            if (claims.isEmpty()) return false;
             var task=claims.getFirst();
             var order=ledger.get(task.orderId());
             var shipment=new Shipment(order.id(), warehouse, order.sku(), order.quantity());
@@ -77,18 +83,19 @@ class ShippingWorker {
                     try (var submit=circuits.reserve(warehouse, WarehouseCircuits.Operation.SUBMIT)) {
                         if (submit==null) {
                             tasks.finish(task,false,null);
-                            return;
+                            return true;
                         }
                         submit.call(() -> post(shipment));
                     }
                 }
             } catch (RestClientException failure) {
                 uncertain(task,warehouse,failure);
-                return;
+                return true;
             }
             tasks.finish(task,true,"CONFIRMED");
             Audit.info("warehouse.confirmed",order.id(),warehouse);
             metrics.counter("fulfillment.warehouse.results","warehouse",warehouse,"outcome","confirmed").increment();
+            return true;
         }
     }
 
