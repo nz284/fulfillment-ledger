@@ -48,10 +48,12 @@ class WarehouseBook {
 class WarehouseApi {
     private final WarehouseBook book;
     private final Set<String> slow=ConcurrentHashMap.newKeySet();
+    private final Set<String> unavailable=ConcurrentHashMap.newKeySet();
     WarehouseApi(WarehouseBook book) { this.book=book; }
 
     @PostMapping("/shipments")
     void submit(@RequestBody Shipment s) throws InterruptedException {
+        checkAvailability(s);
         book.accept(s);
         Audit.info("shipment.submit.committed",s.id(),s.warehouse());
         // Commit first: the client may time out while the shipment already exists.
@@ -61,9 +63,19 @@ class WarehouseApi {
     @PostMapping("/shipments/batch")
     void batch(@RequestBody List<Shipment> items) throws InterruptedException {
         if (items.isEmpty() || items.size()>256) throw new ResponseStatusException(HttpStatus.BAD_REQUEST);
+        items.forEach(this::checkAvailability);
         book.acceptBatch(items);
         if (items.stream().anyMatch(item -> slow.contains(item.warehouse()))) Thread.sleep(3500);
     }
     @PutMapping("/demo/slow/{warehouse}") void slow(@PathVariable String warehouse) { slow.add(warehouse); }
     @DeleteMapping("/demo/slow/{warehouse}") void recover(@PathVariable String warehouse) { slow.remove(warehouse); }
+    @PutMapping("/demo/submit-unavailable/{warehouse}") void reject(@PathVariable String warehouse) { unavailable.add(warehouse); }
+    @DeleteMapping("/demo/submit-unavailable/{warehouse}") void resume(@PathVariable String warehouse) { unavailable.remove(warehouse); }
+
+    private void checkAvailability(Shipment shipment) {
+        if (unavailable.contains(shipment.warehouse())) {
+            Audit.info("warehouse.submit.rejected",shipment.id(),shipment.warehouse());
+            throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE);
+        }
+    }
 }

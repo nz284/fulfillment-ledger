@@ -2,7 +2,6 @@ package dev.fulfillment;
 
 import java.net.http.HttpClient;
 import java.time.Duration;
-import java.util.List;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Profile;
 import org.springframework.http.client.JdkClientHttpRequestFactory;
@@ -20,12 +19,13 @@ class ShippingWorker {
     private final MeterRegistry metrics;
     private final BatchStore batches;
     private final boolean batchEnabled;
+    private final WarehouseCircuits circuits;
 
-    ShippingWorker(Tasks tasks, Ledger ledger, RestClient.Builder builder, MeterRegistry metrics, BatchStore batches,
+    ShippingWorker(Tasks tasks, Ledger ledger, RestClient.Builder builder, MeterRegistry metrics, BatchStore batches, WarehouseCircuits circuits,
             @Value("${app.warehouse-batch:false}") boolean batchEnabled,
             @Value("${app.warehouse-url}") String url) {
         this.tasks=tasks; this.ledger=ledger; this.metrics=metrics;
-        this.batches=batches; this.batchEnabled=batchEnabled;
+        this.batches=batches; this.batchEnabled=batchEnabled; this.circuits=circuits;
         var factory = new JdkClientHttpRequestFactory(HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(2)).build());
         factory.setReadTimeout(Duration.ofSeconds(2));
         this.client=builder.baseUrl(url).requestFactory(factory).build();
@@ -35,42 +35,67 @@ class ShippingWorker {
     @Scheduled(fixedDelayString="${app.poll-ms:5}") void west() { drain("B"); }
 
     private void drain(String warehouse) {
-        var claims=batches.claim("SHIP_"+warehouse,batchEnabled ? 256 : 1);
-        var fresh=claims.stream().filter(t -> t.attempts()==1).toList();
-        if (fresh.size()>1) submitBatch(fresh,warehouse);
-        for (Lease task:claims) {
-            if (fresh.size()>1 && task.attempts()==1) continue;
-            OrderView order=ledger.get(task.orderId());
-            Shipment shipment=new Shipment(order.id(),warehouse,order.sku(),order.quantity());
+        submitFresh(warehouse);
+        recoverOne(warehouse);
+    }
+
+    private void submitFresh(String warehouse) {
+        try (var permit=circuits.reserve(warehouse, WarehouseCircuits.Operation.SUBMIT)) {
+            if (permit==null) return;
+            var claims=batches.claimFresh(warehouse, batchEnabled ? permit.batchLimit() : 1);
+            if (claims.isEmpty()) return;
+            var shipments=batches.shipments(claims);
             try {
-                if (task.attempts()==1 || !exists(shipment)) {
-                    client.post().uri("/shipments").body(shipment).retrieve().toBodilessEntity();
-                }
-                tasks.finish(task,true,"CONFIRMED");
-                Audit.info("warehouse.confirmed",order.id(),warehouse);
-                metrics.counter("fulfillment.warehouse.results","warehouse",warehouse,"outcome","confirmed").increment();
+                permit.call(() -> shipments.size()==1 ? post(shipments.getFirst()) :
+                    client.post().uri("/shipments/batch").body(shipments).retrieve().toBodilessEntity());
             } catch (RestClientException failure) {
-                Audit.warn("warehouse.result.unknown",order.id(),failure);
-                tasks.finish(task,false,"UNCONFIRMED");
-                metrics.counter("fulfillment.warehouse.results","warehouse",warehouse,"outcome","unknown").increment();
+                // One HTTP failure goes to the breaker; each affected order still needs reconciliation.
+                for (var task:claims) uncertain(task,warehouse,failure);
+                return;
             }
+            var confirmed=batches.confirmed(claims);
+            confirmed.forEach(id -> Audit.info("warehouse.confirmed",id,warehouse));
+            metrics.counter("fulfillment.warehouse.results","warehouse",warehouse,"outcome","confirmed")
+                .increment(confirmed.size());
         }
     }
 
-    private void submitBatch(List<Lease> claims,String warehouse) {
-        var shipments=batches.shipments(claims);
-        try {
-            client.post().uri("/shipments/batch").body(shipments).retrieve().toBodilessEntity();
-            var confirmed=batches.confirmed(claims);
-            confirmed.forEach(id -> Audit.info("warehouse.confirmed",id,warehouse));
-            metrics.counter("fulfillment.warehouse.results","warehouse",warehouse,"outcome","confirmed").increment(confirmed.size());
-        } catch (RestClientException failure) {
-            // Ambiguous results return to individual lookup-before-resubmit recovery.
-            for (var task:claims) {
-                Audit.warn("warehouse.result.unknown",task.orderId(),failure);
-                tasks.finish(task,false,"UNCONFIRMED");
+    private org.springframework.http.ResponseEntity<Void> post(Shipment shipment) {
+        return client.post().uri("/shipments").body(shipment).retrieve().toBodilessEntity();
+    }
+
+    private void recoverOne(String warehouse) {
+        try (var lookup=circuits.reserve(warehouse, WarehouseCircuits.Operation.LOOKUP)) {
+            if (lookup==null) return;
+            var claims=batches.claimForLookup(warehouse);
+            if (claims.isEmpty()) return;
+            var task=claims.getFirst();
+            var order=ledger.get(task.orderId());
+            var shipment=new Shipment(order.id(), warehouse, order.sku(), order.quantity());
+            try {
+                if (!lookup.call(() -> exists(shipment))) {
+                    try (var submit=circuits.reserve(warehouse, WarehouseCircuits.Operation.SUBMIT)) {
+                        if (submit==null) {
+                            tasks.finish(task,false,null);
+                            return;
+                        }
+                        submit.call(() -> post(shipment));
+                    }
+                }
+            } catch (RestClientException failure) {
+                uncertain(task,warehouse,failure);
+                return;
             }
+            tasks.finish(task,true,"CONFIRMED");
+            Audit.info("warehouse.confirmed",order.id(),warehouse);
+            metrics.counter("fulfillment.warehouse.results","warehouse",warehouse,"outcome","confirmed").increment();
         }
+    }
+
+    private void uncertain(Lease task, String warehouse, RestClientException failure) {
+        Audit.warn("warehouse.result.unknown",task.orderId(),failure);
+        tasks.finish(task,false,"UNCONFIRMED");
+        metrics.counter("fulfillment.warehouse.results","warehouse",warehouse,"outcome","unknown").increment();
     }
 
     private boolean exists(Shipment expected) {
@@ -79,6 +104,9 @@ class ShippingWorker {
             if (!expected.equals(found)) throw new RestClientException("Conflicting warehouse record");
             Audit.info("warehouse.lookup.matched",expected.id(),expected.warehouse());
             return true;
-        } catch (HttpClientErrorException.NotFound missing) { return false; }
+        } catch (HttpClientErrorException.NotFound missing) {
+            Audit.info("warehouse.lookup.missing",expected.id(),expected.warehouse());
+            return false;
+        }
     }
 }

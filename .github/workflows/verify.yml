@@ -14,6 +14,10 @@ jobs:
       - run: docker compose --profile observe --profile fault config --quiet
       - run: docker compose up --build -d
       - run: python3 scripts/smoke.py
+      - name: Verify per-warehouse circuit isolation and recovery
+        run: CIRCUIT_REPORT=circuit-report.json python3 scripts/circuit_drill.py
+      - uses: actions/upload-artifact@v4
+        with: {name: circuit-report, path: circuit-report.json}
       - name: Stop smoke stack before the two-worker drill
         run: docker compose down
       - name: Kill the lease owner and verify takeover

@@ -19,15 +19,27 @@ class BatchStore {
     }
 
     List<Lease> claim(String kind, int limit) {
+        return claim(kind, limit, "");
+    }
+
+    List<Lease> claimFresh(String warehouse, int limit) {
+        return claim("SHIP_" + warehouse, limit, " AND attempts=0");
+    }
+
+    List<Lease> claimForLookup(String warehouse) {
+        return claim("SHIP_" + warehouse, 1, " AND attempts>0");
+    }
+
+    private List<Lease> claim(String kind, int limit, String attemptFilter) {
         List<Object[]> rows = em.createNativeQuery("""
             WITH ready AS (
-                SELECT id FROM work_item WHERE kind=:kind AND NOT done AND available_at<=now()
+                SELECT id FROM work_item WHERE kind=:kind AND NOT done AND available_at<=now()%s
                 ORDER BY available_at,id LIMIT :limit FOR UPDATE SKIP LOCKED
             )
             UPDATE work_item w SET available_at=now()+interval '30 seconds',
                 attempts=attempts+1, token=token+1 FROM ready WHERE w.id=ready.id
             RETURNING w.id,w.order_id,w.payload,w.token,w.attempts
-            """, Object[].class).setParameter("kind",kind).setParameter("limit",limit).getResultList();
+            """.formatted(attemptFilter), Object[].class).setParameter("kind",kind).setParameter("limit",limit).getResultList();
         return rows.stream().map(row -> new Lease((java.util.UUID)row[0],(java.util.UUID)row[1],
             (String)row[2],(Long)row[3],(Integer)row[4])).toList();
     }

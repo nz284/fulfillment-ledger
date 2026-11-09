@@ -91,6 +91,50 @@
           "refId": "A"
         }
       ]
+    },
+    {
+      "id": 5,
+      "title": "Warehouse circuit state (0 closed, 1 open, 2 half-open)",
+      "type": "timeseries",
+      "gridPos": {
+        "x": 0,
+        "y": 16,
+        "w": 12,
+        "h": 8
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "targets": [
+        {
+          "expr": "fulfillment_warehouse_circuit_state",
+          "refId": "A",
+          "legendFormat": "{{instance}} {{warehouse}} {{operation}}"
+        }
+      ]
+    },
+    {
+      "id": 6,
+      "title": "Denied warehouse admission checks per second",
+      "type": "timeseries",
+      "gridPos": {
+        "x": 12,
+        "y": 16,
+        "w": 12,
+        "h": 8
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "targets": [
+        {
+          "expr": "rate(fulfillment_warehouse_circuit_denied_total[2m])",
+          "refId": "A",
+          "legendFormat": "{{instance}} {{warehouse}} {{operation}}"
+        }
+      ]
     }
   ]
 }

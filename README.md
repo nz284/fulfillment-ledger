@@ -166,6 +166,8 @@ Warehouse endpoints accept requests without a tenant header. The shipment UUID i
 | `GET /shipments/{id}` | Shipment UUID. | `200` with the four shipment fields shown above. | `400` for a malformed UUID. `404` if the warehouse has no such shipment. |
 | `PUT /demo/slow/{warehouse}` | `A` or `B`, with an empty body. | `200` with an empty body. The simulator commits first, then delays the response by 3.5 seconds. The worker times out after 2 seconds. A batch is delayed if any item targets the selected warehouse. | The setting lasts until you disable it or restart the simulator process. |
 | `DELETE /demo/slow/{warehouse}` | The warehouse ID used to enable the delay, with an empty body. | `200` with an empty body. Restores normal response times. | Safe to repeat. |
+| `PUT /demo/submit-unavailable/{warehouse}` | Use `A` or `B`; empty body. | `200`, empty body. Submissions to this warehouse return `503` before persistence. Lookups remain available. | A batch touching that warehouse is rejected in full. |
+| `DELETE /demo/submit-unavailable/{warehouse}` | Use the same warehouse ID; empty body. | `200`, empty body. Re-enable submissions. | Safe to repeat. |
 
 After the order is confirmed, use the same PowerShell session to replay its shipment through both submission endpoints.
 
@@ -192,6 +194,16 @@ All three Java processes expose these `GET` endpoints without business headers. 
 | `/actuator/prometheus` | Metrics in Prometheus text format. Try `curl http://localhost:8080/actuator/prometheus`. |
 
 ## Observe a failure
+
+### Warehouse circuit breakers
+
+Each worker uses Resilience4j to track four independent circuits: submit and lookup for each warehouse. Connection/read failures and HTTP 5xx responses count toward opening a circuit. Business conflicts are excluded. A lookup returning 404 completes normally and allows resubmission with the same shipment ID if submit permission is available.
+
+The default count window and minimum sample count are both 10. Five failures in ten calls open that circuit for 10 seconds. After cooldown, one half-open call per instance can probe the warehouse. A submit probe carries one shipment; successful submissions then double the batch limit up to 256. A batch HTTP failure counts once for the circuit and leaves each affected shipment eligible for reconciliation.
+
+A worker reserves permission before claiming fresh work. While submit is open, fresh orders remain in PostgreSQL with zero attempts. The lookup lane claims one retry at a time, checks the warehouse by shipment ID, and obtains a separate submit permit for any resubmission. Local circuit state resets on worker restart; order state, retries and leases are durable. Configure `APP_CIRCUIT_WINDOW`, `APP_CIRCUIT_FAILURE_RATE` and `APP_CIRCUIT_OPEN_DURATION` to change the defaults.
+
+Run `python scripts/circuit_drill.py` on a local Compose stack with one worker. It measures B under healthy A/B traffic, injects persistent A submission failures, observes a failed half-open probe, restores A, and reconciles every order. Its B fault-latency budget is twice the baseline P95 plus 150 ms. The Grafana dashboard exposes circuit state (0 closed, 1 open, 2 half-open) and denied admission checks by operation and warehouse. The denial counter includes scheduler checks made before inspecting the queue, so its value can exceed the number of affected orders.
 
 ### Kafka dead letters and targeted replay
 
