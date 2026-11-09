@@ -205,8 +205,9 @@ A worker reserves permission before claiming fresh work. While submit is open, f
 
 Run `python scripts/circuit_drill.py` on a local Compose stack with one worker. It measures B under healthy A/B traffic, injects persistent A submission failures, observes a failed half-open probe, restores A, and reconciles every order. Its B fault-latency budget is twice the baseline P95 plus 150 ms. The Grafana dashboard exposes circuit state (0 closed, 1 open, 2 half-open) and denied admission checks by operation and warehouse. The denial counter includes scheduler checks made before inspecting the queue, so its value can exceed the number of affected orders.
 
-### Kafka dead letters and targeted replay
+In the verified 503 drill, A's submit circuit opened, rejected one half-open probe and closed after the next probe succeeded. At the recovery switch, 66 A orders remained unattempted. The worker observed 17 A lookups returning 404 during open intervals. The simulator rejected six submission requests over the outage. B's P95 was 82.54 ms in the healthy phase (48 samples) and 36.68 ms during the fault (72 samples). All 240 orders matched warehouse records and confirmed timelines. [Fault report](benchmarks/2026-11-08-circuit/final/fault.json) · [CI run](https://github.com/nz284/fulfillment-ledger/actions/runs/42557361067)
 
+### Kafka dead letters and targeted replay
 
 The six-partition source topic feeds two independent consumers. Dispatch failures go to `fulfillment.dispatch.dlt`; timeline failures go to `fulfillment.timeline.dlt`. Each DLT has six partitions. A DLT entry preserves the original key and payload bytes, source topic, partition, offset, consumer group and exception headers. Identify a failure by **source topic, partition, offset and group**. A crash after the DLT write and before source-offset commit can produce more than one DLT entry for that identity.
 
@@ -269,6 +270,8 @@ python scripts/reconcile.py baseline-001
 Use a fresh run ID for each load run. Each iteration creates an order, reads warehouse metadata and queries the order.
 
 ### Measured throughput
+
+**Circuit-breaker regression.** With the same 4 GiB memory high watermark, 2 GiB WAL budget and 2,400 offered orders/s as the higher-memory DLT trial, the final worker confirmed 287,831 orders in the 120-second measurement cohort. Its average including drain was 2,395.37 confirmations/s. Every measured second exceeded 2,000, with a minimum of 2,070. All orders matched their warehouse payloads and Kafka timelines. The complete 180-second run dropped 4,591 scheduled iterations. The earlier implementation polled for retries on every fresh dispatch tick; it missed the per-second target once (1,997). The final worker backs off empty lookup scans for 100 ms. [Final measurements](benchmarks/2026-11-08-circuit/final) · [Initial measurements](benchmarks/2026-11-08-circuit/initial)
 
 **DLT-enabled regression runs.** Each run used 60 seconds of warm-up and a fixed 120-second measurement window. All measured orders matched warehouse records and projected timelines. At the original 3.125 GiB memory high watermark, each run had individual seconds below target. A final single-host run of commit `5a6f8c9` used a 4 GiB memory high watermark and a 4.75 GiB ceiling for the stack and load generator together. With the 2 GiB WAL budget restored, its slowest measured second reached **2,091 confirmations**. The measurement window completed 288,000 orders and 864,000 HTTP requests with zero HTTP errors. Across the full 180 seconds k6 dropped 4,062 scheduled iterations, so the full-run zero-drop check failed.
 
