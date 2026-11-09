@@ -1,0 +1,18 @@
+{
+  "orders_reconciled": 240,
+  "normal_b_samples": 48,
+  "fault_b_samples": 72,
+  "normal_b_p95_ms": 82.54,
+  "fault_b_p95_ms": 36.68,
+  "b_budget_ms": 315.09,
+  "a_circuit_transitions": [
+    "OPEN",
+    "HALF_OPEN",
+    "OPEN",
+    "HALF_OPEN",
+    "CLOSED"
+  ],
+  "a_unattempted_before_restore": 66,
+  "a_lookups_while_open": 17,
+  "a_rejected_http_requests": 6
+}

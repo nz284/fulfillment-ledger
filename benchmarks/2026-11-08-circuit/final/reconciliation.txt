@@ -1,0 +1,8 @@
+COPY 5140930
+CREATE TABLE
+COPY 5140930
+ orders | matched | projected | total_seconds | confirmed_per_s | drain_s | p99_seconds 
+--------+---------+-----------+---------------+-----------------+---------+-------------
+ 287831 |  287831 |    287831 |       120.161 |         2395.37 |   0.152 |    0.227662
+(1 row)
+

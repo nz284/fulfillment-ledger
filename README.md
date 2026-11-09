@@ -207,6 +207,7 @@ Run `python scripts/circuit_drill.py` on a local Compose stack with one worker. 
 
 ### Kafka dead letters and targeted replay
 
+
 The six-partition source topic feeds two independent consumers. Dispatch failures go to `fulfillment.dispatch.dlt`; timeline failures go to `fulfillment.timeline.dlt`. Each DLT has six partitions. A DLT entry preserves the original key and payload bytes, source topic, partition, offset, consumer group and exception headers. Identify a failure by **source topic, partition, offset and group**. A crash after the DLT write and before source-offset commit can produce more than one DLT entry for that identity.
 
 | Failure | Behavior |
