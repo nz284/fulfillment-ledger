@@ -157,7 +157,10 @@ class ReconciliationStore {
         WorkItem task=em.find(WorkItem.class,order.id,LockModeType.PESSIMISTIC_WRITE);
         em.refresh(order,LockModeType.PESSIMISTIC_WRITE);
         String kind=classify(order,shipment);
-        if (kind==null) return;
+        if (kind==null) {
+            if (!task.done) { task.done=true; task.token++; }
+            return;
+        }
         if (!kind.equals("UNCONFIRMED_MATCH")) {
             observe(run,order.id,kind,"OPEN",new Evidence(order.view(),shipment));
             return;

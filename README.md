@@ -193,6 +193,56 @@ All three Java processes expose these `GET` endpoints without business headers. 
 | `/actuator/health/readiness` | Application readiness probe. Use the end-to-end drill above to verify the full fulfillment flow. |
 | `/actuator/prometheus` | Metrics in Prometheus text format. Try `curl http://localhost:8080/actuator/prometheus`. |
 
+### Scheduled reconciliation and discrepancy review
+
+Start the optional operations service with `docker compose --profile reconcile up --build -d`. Its HTTP API listens on **127.0.0.1:8083**. It accesses the warehouse over HTTP and persists its own checkpoints and issues in the platform database. The operations endpoints span tenants and are intended for the local demo. A review's actor field is a supplied label. Protect this interface with operator authentication before exposing it beyond loopback.
+
+The scheduler creates a run for each completed UTC hour after a five-minute grace period, starting with the hour in which the reconciliation migration ran. Its durable scheduling cursor catches up after restarts. Explicit windows can backfill older platform orders. Existing warehouse rows receive a manifest timestamp at migration; their historical acceptance time is unknown.
+
+Each run covers a half-open interval `[from,to)`. The first pass scans platform order creation times and performs bulk warehouse lookups by ID across all shipment dates. The reverse pass scans the warehouse manifest by its own recording time and looks up platform orders across all dates. The comparison uses the fulfillment UUID, warehouse, SKU and quantity. This handles a shipment recorded in the hour after its order. Both scans use a timestamp/UUID keyset cursor. Each page commits its observations, any safe repair, and the new cursor together. A warehouse outage leaves the last committed cursor intact. Failed pages retry with exponential backoff capped at 60 seconds. A run revision fences stale responses from competing reconciler replicas.
+
+| Issue kind | Meaning and handling |
+|---|---|
+| `PLATFORM_MISSING` | The warehouse recorded a shipment whose UUID is absent from the platform. An operator investigates. |
+| `WAREHOUSE_MISSING` | An eligible platform order has no matching warehouse record. Reconciliation records the gap without submitting a shipment. |
+| `PAYLOAD_MISMATCH` | Warehouse, SKU or quantity differs. Both snapshots are retained for review. |
+| `STATE_PENDING` | Payloads match but the mature platform order is still accepted. An operator investigates the pending workflow. |
+| `UNCONFIRMED_MATCH` | Payloads match and the platform is waiting for confirmation. A single transaction fences the shipping task, confirms the order, appends history and enqueues its outbox event. The issue is marked `AUTO_REPAIRED`. |
+
+An issue has one stable ID per order and kind. Re-observing the same difference updates its last observation. An unchanged reviewed issue keeps its review status. A later matching comparison clears an outstanding issue and retains its evidence and review history. A new occurrence can reopen it. Correct the source through the appropriate operator process, then rerun the affected window to verify the correction.
+
+| Method and path on port 8083 | Request and response |
+|---|---|
+| `POST /reconciliation/runs?from=...&to=...` | Two UTC timestamps. Returns `202` and the run record. The window must be positive, at most 24 hours, and end before the grace cutoff. Repeating the same window returns the same run ID. |
+| `GET /reconciliation/runs?limit=50` | Lists recent windows by end time. Page size is 1–500. |
+| `GET /reconciliation/runs/{id}` | Shows phase (`ORDERS`, `MANIFEST`, `DONE`), cursor, committed page count, consecutive failures, latest error type and next eligible time. Unknown ID returns `404`. |
+| `POST /reconciliation/runs/{id}/rerun` | Returns `202`. Restarts a completed comparison from its first page. An active run keeps its progress. |
+| `GET /reconciliation/issues?orderId=...&after=...&limit=100` | All parameters optional. Use the last issue UUID as the exclusive cursor. Includes status, first and latest discrepancy evidence, and last associated run ID. A missing side is JSON null. |
+| `POST /reconciliation/issues/{id}/review` | Send `{"actor":"ops-demo","note":"Checking the signed packing slip"}`. Returns `204` and records an append-only review. Returns `409` when the issue is no longer open. |
+| `GET /reconciliation/issues/{id}/reviews` | Returns the actor, note and timestamp for each recorded review. |
+
+For example, in PowerShell, request the most recently completed hour that is at least five minutes old:
+
+```powershell
+$ops = 'http://localhost:8083/reconciliation'
+$eligible = [DateTime]::UtcNow.AddMinutes(-5)
+$end = $eligible.Date.AddHours($eligible.Hour)
+$from = $end.AddHours(-1).ToString("yyyy-MM-ddTHH:mm:ssZ")
+$to = $end.ToString("yyyy-MM-ddTHH:mm:ssZ")
+$run = Invoke-RestMethod -Method Post "$ops/runs?from=$from&to=$to"
+Invoke-RestMethod "$ops/runs/$($run.id)"
+Invoke-RestMethod "$ops/issues?limit=50"
+```
+
+The simulator exposes two reconciliation endpoints on **port 8082**:
+
+| Method and path | Request and response |
+|---|---|
+| `GET /shipments/manifest?from=...&to=...&limit=200` | Returns an array of `{"recordedAt":"...","shipment":{...}}` ordered by recording time and UUID. To continue, pass the last row's `afterTime` and `afterId` together with the same window. Limit 1–500. |
+| `POST /shipments/lookup` | Send a JSON array of 1–500 shipment UUIDs. Returns shipment objects for IDs found, regardless of recording time. A successful empty array means none were found. A failed or malformed HTTP response triggers a retry. |
+
+The default page size is 200. To run the synthetic end-to-end drill in a disposable demo stack, enable the reconciler and run `python scripts/reconciliation_drill.py`. The drill creates historical test orders and warehouse rows, exercises review and recheck, and leaves the evidence available for inspection. CI also interrupts a paginated manifest with HTTP 503 and verifies recovery from the saved cursor.
+
 ## Observe a failure
 
 ### Warehouse circuit breakers

@@ -56,7 +56,7 @@ class FulfillmentIT {
         warehouse.stubFor(first.willReturn(okJson("""
             [{"recordedAt":"2020-01-01T00:10:00Z","shipment":{"id":"%s","warehouse":"A","sku":"book","quantity":2}}]
             """.formatted(id))));
-        warehouse.stubFor(rest.willReturn(serviceUnavailable()));
+        var outage=warehouse.stubFor(rest.willReturn(serviceUnavailable()));
         var run=reconciliation.request(from,to);
         new ReconciliationWorker(reconciliation,http.clone(),warehouse.baseUrl(),1,false).tick();
         var failed=reconciliation.get(run.id());
@@ -65,6 +65,7 @@ class FulfillmentIT {
         assertEquals(1,failed.failures());
         assertEquals("PLATFORM_MISSING",reconciliation.issues(id,null,10).getFirst().kind());
 
+        warehouse.removeStub(outage);
         warehouse.stubFor(rest.willReturn(okJson("[]")));
         var restarted=new ReconciliationWorker(reconciliation,http.clone(),warehouse.baseUrl(),1,false);
         await().atMost(Duration.ofSeconds(10)).untilAsserted(()->{
@@ -73,6 +74,24 @@ class FulfillmentIT {
         });
         warehouse.verify(1,getRequestedFor(urlPathEqualTo("/shipments/manifest")).withQueryParam("afterId",absent()));
         assertEquals(1,reconciliation.issues(id,null,10).size());
+    }
+
+    @Test
+    @org.springframework.transaction.annotation.Transactional
+    void scheduleCatchesUpAndStalePageCannotAdvanceTheRun() {
+        var start=java.time.Instant.parse("2021-03-01T00:00:00Z");
+        em.createNativeQuery("UPDATE reconciliation_schedule SET next_start=:start").setParameter("start",start).executeUpdate();
+        reconciliation.scheduleClosedWindow();
+        var scheduled=reconciliation.request(start,start.plusSeconds(3600));
+        reconciliation.apply(scheduled,List.of(),Map.of(),true);
+        reconciliation.apply(scheduled,List.of(),Map.of(),true);
+        reconciliation.failed(scheduled,new IllegalStateException("stale failure"));
+        var current=reconciliation.get(scheduled.id());
+        assertEquals("MANIFEST",current.phase());
+        assertEquals(1,current.pages());
+        assertEquals(0,current.failures());
+        assertEquals(start.plusSeconds(3600),ScanKey.instant(
+            em.createNativeQuery("SELECT next_start FROM reconciliation_schedule").getSingleResult()));
     }
 
     @Test
