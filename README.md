@@ -243,6 +243,40 @@ The simulator exposes two reconciliation endpoints on **port 8082**:
 
 The default page size is 200. To run the synthetic end-to-end drill in a disposable demo stack, enable the reconciler and run `python scripts/reconciliation_drill.py`. The drill creates historical test orders and warehouse rows, exercises review and recheck, and leaves the evidence available for inspection. CI also interrupts a paginated manifest with HTTP 503 and verifies recovery from the saved cursor.
 
+### Review-note search and discrepancy statistics
+
+Start the optional search stack with `docker compose --profile search up --build -d`. This starts the reconciler, a single-node Elasticsearch 8.19 instance and a separate search process. Use **127.0.0.1:8084** for search and **127.0.0.1:8083** for authoritative issue details and reviews. Elasticsearch is reachable only inside the Compose network. The search API, like the reconciler, is a cross-tenant operations interface for the loopback demo.
+
+For example, find reviewed quantity discrepancies in warehouse A whose review notes contain both “packing” and “slip”, and show the top SKUs among all matches:
+
+```sh
+curl -sG http://localhost:8084/issue-search \
+  --data-urlencode 'q=packing slip' --data-urlencode 'warehouse=A' \
+  --data-urlencode 'kind=PAYLOAD_MISMATCH' --data-urlencode 'status=REVIEWED'
+```
+
+| Method and path | Inputs and result |
+|---|---|
+| `GET /issue-search` | Optional `q` searches analyzed review notes with AND semantics. `warehouse`, `sku`, `kind` and `status` accept exact filters. `from` (inclusive) and `to` (exclusive) filter first discovery time using ISO timestamps. `offset` defaults to 0, `limit` to 25 (1–100), and the result window ends at 10,000. Results are sorted by newest discovery time then issue ID. |
+| `GET /issue-search/generation` | Shows the active and building physical indexes, backfill cursor, and any retired index awaiting removal. |
+| `POST /issue-search/rebuild` | Returns `202` with the requested generation. Repeating the request while a build is active returns the same target. Poll the generation endpoint until that target is active. |
+| `GET /reconciliation/issues/{id}` (port 8083) | Reads current evidence and status from PostgreSQL using the search hit's `issueId`. Returns `404` for an unknown issue. Use the existing reconciliation review endpoint to record decisions. |
+
+The search response contains an exact `total`, a page of `issues`, and `aggregations` for warehouse, SKU, discrepancy kind and status. For example, `aggregations.sku.buckets` contains `key` and `doc_count` for the most frequent SKUs. Set `buckets` (1–100, default 10) to change the number of buckets per field. Aggregations cover the entire filtered result, independent of page size. A disagreement between the platform and warehouse can place one issue in both reported SKU or warehouse buckets.
+
+To request a rebuild and inspect its progress:
+
+```sh
+curl -X POST http://localhost:8084/issue-search/rebuild
+curl http://localhost:8084/issue-search/generation
+```
+
+**Delivery and recovery.** PostgreSQL assigns a monotonically increasing version to each issue. Changes to issues and review notes update a dedicated outbox in the business transaction. A publisher coalesces pending versions by issue ID and waits for Kafka acknowledgement before removing the acknowledged version. The independent `reconciliation-issue-search-v1` group consumes `reconciliation.issue-changes.v1`, reads the current PostgreSQL snapshot and writes one Elasticsearch document per issue with external version checks. Search is near real time. When Elasticsearch is offline, search requests return `503`; order fulfillment, reconciliation and review can continue.
+
+On first startup or after loss of the active physical index, the service builds a new generation from PostgreSQL. A manual rebuild follows the same path. Backfill advances by UUID in bounded pages and persists its cursor. A search-only database lock coordinates live batch writes and page writes; business transactions do not take this lock. During rebuild, live changes are written to the candidate and to the existing active index when present. The service refreshes the completed candidate, atomically moves the `ledger-issues` read alias and then retires the old generation. Losing a partially built index rewinds the backfill.
+
+To run the destructive recovery scenario safely in a **fresh disposable Compose project**, use `python scripts/search_drill.py`. The script seeds issues, verifies UTF-8 text search and aggregations, stops Elasticsearch during order processing and review, replays stale notifications, reviews an already-scanned issue during rebuild and deletes its own active index to exercise recovery. It removes its test stack and volumes on exit.
+
 ## Observe a failure
 
 ### Warehouse circuit breakers

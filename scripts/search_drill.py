@@ -70,6 +70,8 @@ def run():
 
     first_order = seed_shipment("A",sample_sku)
     second_order = seed_shipment("B",sample_sku)
+    sql("fulfillment",f"""INSERT INTO fulfillment_order(id,tenant,request_key,sku,quantity,warehouse,state,created_at)
+        VALUES ('{first_order}','{PROJECT}','mismatch','DRILL-PLATFORM-SKU',3,'A','CONFIRMED','2020-01-01T00:05Z')""")
     for _ in range(12):
         seed_shipment("A","FILLER")
     window = urlencode({"from":"2020-01-01T00:00:00Z","to":"2020-01-01T01:00:00Z"})
@@ -88,11 +90,16 @@ def run():
     def buckets(result, field):
         return {b["key"]:b["doc_count"] for b in result["aggregations"][field]["buckets"]}
     until("pre-existing notes indexed",lambda: find(q="packing signed",warehouse="A",sku=sample_sku,
-          kind="PLATFORM_MISSING",status="REVIEWED")["total"]==1)
+          kind="PAYLOAD_MISMATCH",status="REVIEWED")["total"]==1)
     require(find(q="albarán",sku=sample_sku)["total"]==1,"UTF-8 review text lost")
     result = find(sku=sample_sku,limit=1)
     require(result["total"]==2 and len(result["issues"])==1 and buckets(result,"warehouse")=={"A":1,"B":1},
             "filtered totals or top warehouse counts differ")
+    require(buckets(result,"kind")=={"PAYLOAD_MISMATCH":1,"PLATFORM_MISSING":1} and
+            buckets(result,"sku")=={sample_sku:2,"DRILL-PLATFORM-SKU":1},
+            "mismatch kind or either side's SKU disappeared from the aggregation")
+    require(find(sku="DRILL-PLATFORM-SKU",kind="PAYLOAD_MISMATCH")["issues"][0]["issueId"]==first,
+            "platform-side SKU lookup missed the discrepancy")
     require(find(sku=sample_sku, to="2001-01-01T00:00:00Z")["total"]==0, "discovery-time filter ignored")
 
     compose("stop","elasticsearch",capture=False)
@@ -156,6 +163,7 @@ def run():
     total=int(sql("fulfillment","SELECT count(*) FROM reconciliation_issue"))
     require(find()["total"]==total,"reconstructed total differs from PostgreSQL")
     report={"reconciled_issues":total,"packing_slip_matches":2,"warehouse_buckets":buckets(result,"warehouse"),
+            "filtered_sku_buckets":buckets(result,"sku"),"filtered_kind_buckets":buckets(result,"kind"),
             "normal_order_confirmed_during_outage":True,"reordered_notifications_consumed":3,
             "concurrent_review_preserved":True,"deleted_index_rebuilt":True}
     print(json.dumps(report,indent=2),flush=True)
