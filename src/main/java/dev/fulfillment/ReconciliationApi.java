@@ -30,6 +30,7 @@ class ReconciliationApi {
     }
 
     record Review(String actor,String note) {}
+    @GetMapping("/issues/{id}") ReconciliationStore.Issue issue(@PathVariable UUID id) { return store.issue(id); }
     @GetMapping("/issues/{id}/reviews")
     List<ReconciliationStore.ReviewEntry> reviews(@PathVariable UUID id) { return store.reviews(id); }
     @PostMapping("/issues/{id}/review") @ResponseStatus(HttpStatus.NO_CONTENT)

@@ -3,6 +3,15 @@ on: [push, pull_request, workflow_dispatch]
 permissions:
   contents: read
 jobs:
+  issue-search:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify full-text search, aggregations, replay and index-loss recovery
+        run: SEARCH_REPORT=search-report.json python3 scripts/search_drill.py
+      - uses: actions/upload-artifact@v4
+        with: {name: issue-search-report, path: search-report.json}
   verify:
     runs-on: ubuntu-latest
     timeout-minutes: 20

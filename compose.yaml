@@ -51,9 +51,24 @@ services:
     environment: {<<: *base, SPRING_PROFILES_ACTIVE: worker, APP_NAME: worker, APP_WAREHOUSE_BATCH: "true"}
   reconciler:
     <<: *app
-    profiles: [reconcile]
+    profiles: [reconcile, search]
     environment: {<<: *base, SPRING_PROFILES_ACTIVE: reconciler, APP_NAME: reconciler, APP_RECONCILIATION_PAGE_SIZE: "${RECONCILIATION_PAGE_SIZE:-200}"}
     ports: ["127.0.0.1:8083:8080"]
+  elasticsearch:
+    image: docker.elastic.co/elasticsearch/elasticsearch:8.19.0
+    profiles: [search]
+    environment:
+      discovery.type: single-node
+      node.store.allow_mmap: "false"
+      xpack.security.enabled: "false"
+      action.auto_create_index: "false"
+      ES_JAVA_OPTS: "-Xms512m -Xmx512m"
+    volumes: [searchdata:/usr/share/elasticsearch/data]
+  issue-search:
+    <<: *app
+    profiles: [search]
+    environment: {<<: *base, SPRING_PROFILES_ACTIVE: search, APP_NAME: issue-search}
+    ports: ["127.0.0.1:8084:8080"]
   warehouse:
     <<: *app
     environment: {<<: *base, SPRING_PROFILES_ACTIVE: warehouse, APP_NAME: warehouse, DB_URL: "jdbc:postgresql://postgres:5432/warehouse"}
@@ -84,4 +99,4 @@ services:
     profiles: [fault]
     image: ghcr.io/shopify/toxiproxy:2.12.0
     ports: ["127.0.0.1:8474:8474"]
-volumes: {db: {}, events: {}}
+volumes: {db: {}, events: {}, searchdata: {}}

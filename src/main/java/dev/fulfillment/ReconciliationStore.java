@@ -189,12 +189,22 @@ class ReconciliationStore {
 
     record Issue(UUID id,UUID orderId,String kind,String status,Evidence firstEvidence,Evidence latestEvidence,UUID lastRun) {}
     List<Issue> issues(UUID order,UUID after,int limit) {
+        return findIssues(order,after,null,limit);
+    }
+
+    Issue issue(UUID id) {
+        return findIssues(null,null,id,1).stream().findFirst().orElseThrow(()->new ResponseStatusException(HttpStatus.NOT_FOUND));
+    }
+
+    private List<Issue> findIssues(UUID order,UUID after,UUID id,int limit) {
         if (limit<1 || limit>500) throw new ResponseStatusException(HttpStatus.BAD_REQUEST);
-        String filter=(order==null ? "" : " AND order_id=:ord") + (after==null ? "" : " AND id>:after");
+        String filter=(order==null ? "" : " AND order_id=:ord") + (after==null ? "" : " AND id>:after") +
+            (id==null ? "" : " AND id=:id");
         var q=em.createNativeQuery("SELECT id,order_id,kind,status,first_evidence,latest_evidence,run_id "+
             "FROM reconciliation_issue WHERE true"+filter+" ORDER BY id",Object[].class).setMaxResults(limit);
         if (order!=null) q.setParameter("ord",order);
         if (after!=null) q.setParameter("after",after);
+        if (id!=null) q.setParameter("id",id);
         List<Object[]> rows=q.getResultList();
         return rows.stream().map(r->new Issue((UUID)r[0],(UUID)r[1],(String)r[2],(String)r[3],
             json.readValue((String)r[4],Evidence.class),json.readValue((String)r[5],Evidence.class),(UUID)r[6])).toList();
