@@ -14,6 +14,11 @@ jobs:
       - run: docker compose --profile observe --profile fault config --quiet
       - run: docker compose up --build -d
       - run: python3 scripts/smoke.py
+      - name: Reconcile warehouse manifests, review differences and verify safe repairs
+        run: |
+          RECONCILIATION_PAGE_SIZE=2 docker compose --profile reconcile up -d reconciler
+          python3 scripts/reconciliation_drill.py
+          docker compose --profile reconcile stop reconciler
       - name: Verify per-warehouse circuit isolation and recovery
         run: CIRCUIT_REPORT=circuit-report.json python3 scripts/circuit_drill.py
       - uses: actions/upload-artifact@v4
@@ -35,4 +40,4 @@ jobs:
       - if: failure()
         run: docker compose logs --tail 80
       - if: always()
-        run: docker compose down -v
+        run: docker compose --profile reconcile down -v

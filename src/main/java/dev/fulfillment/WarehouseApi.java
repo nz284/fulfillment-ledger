@@ -1,6 +1,7 @@
 package dev.fulfillment;
 
 import java.util.*;
+import java.time.Instant;
 import java.util.concurrent.ConcurrentHashMap;
 import jakarta.persistence.EntityManager;
 import org.springframework.context.annotation.Profile;
@@ -41,6 +42,27 @@ class WarehouseBook {
         Object[] row=(Object[]) rows.getFirst();
         return new Shipment(id,(String)row[0],(String)row[1],(Integer)row[2]);
     }
+
+    List<ManifestLine> manifest(Instant from, Instant to, Instant afterTime, UUID afterId, int limit) {
+        if (!from.isBefore(to) || limit<1 || limit>500 || (afterTime==null)!=(afterId==null))
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,"Invalid window, cursor or limit");
+        String cursor=afterId==null ? "" : " AND (recorded_at,id)>(:time,:id)";
+        var query=em.createNativeQuery("SELECT recorded_at,id,warehouse,sku,quantity FROM shipment " +
+            "WHERE recorded_at>=:lo AND recorded_at<:hi"+cursor+" ORDER BY recorded_at,id",Object[].class)
+            .setParameter("lo",from).setParameter("hi",to).setMaxResults(limit);
+        if (afterId!=null) query.setParameter("time",afterTime).setParameter("id",afterId);
+        List<Object[]> rows=query.getResultList();
+        return rows.stream().map(r -> new ManifestLine(ScanKey.instant(r[0]),
+            new Shipment((UUID)r[1],(String)r[2],(String)r[3],(Integer)r[4]))).toList();
+    }
+
+    List<Shipment> lookupMany(List<UUID> ids) {
+        if (ids.isEmpty() || ids.size()>500 || ids.stream().anyMatch(Objects::isNull))
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,"Supply 1 to 500 shipment IDs");
+        List<Object[]> rows=em.createNativeQuery("SELECT id,warehouse,sku,quantity FROM shipment WHERE id IN (:ids)",Object[].class)
+            .setParameter("ids",ids).getResultList();
+        return rows.stream().map(r -> new Shipment((UUID)r[0],(String)r[1],(String)r[2],(Integer)r[3])).toList();
+    }
 }
 
 @RestController
@@ -60,6 +82,14 @@ class WarehouseApi {
         if (slow.contains(s.warehouse())) Thread.sleep(3500);
     }
     @GetMapping("/shipments/{id}") Shipment lookup(@PathVariable UUID id) { return book.get(id); }
+    @GetMapping("/shipments/manifest")
+    List<ManifestLine> manifest(@RequestParam Instant from,@RequestParam Instant to,
+            @RequestParam(required=false) Instant afterTime,@RequestParam(required=false) UUID afterId,
+            @RequestParam(defaultValue="200") int limit) {
+        return book.manifest(from,to,afterTime,afterId,limit);
+    }
+    @PostMapping("/shipments/lookup")
+    List<Shipment> lookupMany(@RequestBody List<UUID> ids) { return book.lookupMany(ids); }
     @PostMapping("/shipments/batch")
     void batch(@RequestBody List<Shipment> items) throws InterruptedException {
         if (items.isEmpty() || items.size()>256) throw new ResponseStatusException(HttpStatus.BAD_REQUEST);

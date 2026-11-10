@@ -49,6 +49,11 @@ services:
   worker:
     <<: *app
     environment: {<<: *base, SPRING_PROFILES_ACTIVE: worker, APP_NAME: worker, APP_WAREHOUSE_BATCH: "true"}
+  reconciler:
+    <<: *app
+    profiles: [reconcile]
+    environment: {<<: *base, SPRING_PROFILES_ACTIVE: reconciler, APP_NAME: reconciler, APP_RECONCILIATION_PAGE_SIZE: "${RECONCILIATION_PAGE_SIZE:-200}"}
+    ports: ["127.0.0.1:8083:8080"]
   warehouse:
     <<: *app
     environment: {<<: *base, SPRING_PROFILES_ACTIVE: warehouse, APP_NAME: warehouse, DB_URL: "jdbc:postgresql://postgres:5432/warehouse"}

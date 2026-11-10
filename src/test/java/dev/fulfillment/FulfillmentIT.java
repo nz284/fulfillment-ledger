@@ -44,6 +44,36 @@ class FulfillmentIT {
     @Autowired WarehouseBook book;
     @Autowired BatchStore batches;
     @Autowired jakarta.persistence.EntityManager em;
+    @Autowired ReconciliationStore reconciliation;
+    @Autowired org.springframework.web.client.RestClient.Builder http;
+
+    @Test void manifestFailureResumesAtTheCommittedCursor() {
+        var from=java.time.Instant.parse("2020-01-01T00:00:00Z");
+        var to=from.plusSeconds(3600);
+        var id=UUID.randomUUID();
+        var first=get(urlPathEqualTo("/shipments/manifest")).withQueryParam("afterId",absent());
+        var rest=get(urlPathEqualTo("/shipments/manifest")).withQueryParam("afterId",equalTo(id.toString()));
+        warehouse.stubFor(first.willReturn(okJson("""
+            [{"recordedAt":"2020-01-01T00:10:00Z","shipment":{"id":"%s","warehouse":"A","sku":"book","quantity":2}}]
+            """.formatted(id))));
+        warehouse.stubFor(rest.willReturn(serviceUnavailable()));
+        var run=reconciliation.request(from,to);
+        new ReconciliationWorker(reconciliation,http.clone(),warehouse.baseUrl(),1,false).tick();
+        var failed=reconciliation.get(run.id());
+        assertEquals("MANIFEST",failed.phase());
+        assertEquals(id,failed.cursorId());
+        assertEquals(1,failed.failures());
+        assertEquals("PLATFORM_MISSING",reconciliation.issues(id,null,10).getFirst().kind());
+
+        warehouse.stubFor(rest.willReturn(okJson("[]")));
+        var restarted=new ReconciliationWorker(reconciliation,http.clone(),warehouse.baseUrl(),1,false);
+        await().atMost(Duration.ofSeconds(10)).untilAsserted(()->{
+            restarted.tick();
+            assertEquals("DONE",reconciliation.get(run.id()).phase());
+        });
+        warehouse.verify(1,getRequestedFor(urlPathEqualTo("/shipments/manifest")).withQueryParam("afterId",absent()));
+        assertEquals(1,reconciliation.issues(id,null,10).size());
+    }
 
     @Test
     @org.springframework.transaction.annotation.Transactional

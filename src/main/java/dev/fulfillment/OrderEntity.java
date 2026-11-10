@@ -13,6 +13,7 @@ class OrderEntity {
     int quantity;
     String warehouse;
     String state;
+    @Column(insertable=false,updatable=false) java.time.Instant createdAt;
     @Version long revision;
 
     OrderView view() { return new OrderView(id, warehouse, sku, quantity, state); }
